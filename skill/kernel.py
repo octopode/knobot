@@ -321,68 +321,6 @@ def kn_duplicate_item(src, dst, slide, index, to_slide, **kw):
                                    "to_slide": int(to_slide)}], **kw)
 
 
-def kn_import_slides_as_images(src, dst, from_deck, slides, keep_notes=True,
-                               timeout=1800, **kw):
-    """UNSUPPORTED on Keynote 12.2.1: `make image slides` CRASHES Keynote.
-
-    Verified 2026-10-16: the command kills the app (-609 "Connection is invalid" raised
-    from the op, Keynote gone) for every input tried -- a 2.6 KB PNG and a 760 KB one,
-    paths under ~/thermofiles that `make new image` reads happily in the same session.
-    The crash is the command, not the file. Raises rather than taking Keynote down.
-
-    Use kn_merge_slides for same-theme decks. For a FOREIGN theme, the working primitives
-    are duplicate-slide + delete-item + add-image (all three verified), i.e. render the
-    wanted slide, duplicate a slide in the target, strip its items and drop the render in
-    full-bleed -- not yet implemented here.
-
-    Original intent follows.
-
-    Remix across decks: bring slides in from another deck as PICTURE slides.
-
-    Keynote 12.2.1 refuses to copy slides or items between documents over AppleScript
-    ("Text items can not be copied", and cross-document references go invalid), so this
-    renders the wanted slides with Keynote and appends them to the target deck with
-    `make image slides`. Speaker notes are carried across as text when keep_notes.
-
-    WHAT YOU GET: pixel-exact slides, appended at the END, that are NOT editable -- no
-    text, no builds, no object structure. Good for reusing a finished slide verbatim;
-    wrong if you need to edit the words afterwards. For editable reuse, work within a
-    single deck (kn_duplicate_slides) or open both decks and copy by hand in Keynote.
-
-    slides: 1-based slide numbers in from_deck."""
-    raise NotImplementedError(
-        "`make image slides` crashes Keynote 12.2.1 (-609) for any image; picture import "
-        "is unavailable. Same-theme decks: kn_merge_slides. Foreign theme: duplicate a "
-        "slide, delete its items and add the rendered PNG (primitives verified, helper "
-        "not written).")
-
-    other = os.path.realpath(from_deck)
-    idx = kn_index(other)
-    imgs = kn_render(other, fmt="png", timeout=timeout)
-    # Keynote omits SKIPPED slides from an export (correctly), so image k is the k-th
-    # NON-SKIPPED slide, not slide k. Map through that order instead of assuming 1:1.
-    shown = [s["n"] for s in idx["slides"] if not s.get("skipped")]
-    if len(imgs) != len(shown):
-        raise RuntimeError("rendered %d images for %d non-skipped slides (%d total); "
-                           "cannot map slides to images"
-                           % (len(imgs), len(shown), idx["n_slides"]))
-    image_of = {n: imgs[i] for i, n in enumerate(shown)}
-    ops = []
-    for n in slides:
-        n = int(n)
-        if not 1 <= n <= idx["n_slides"]:
-            raise ValueError("slide %r is outside %s (1-%d)" % (n, other, idx["n_slides"]))
-        if n not in image_of:
-            raise ValueError("slide %d of %s is SKIPPED, so Keynote exports no image for "
-                             "it; unskip it in Keynote or choose another slide"
-                             % (n, os.path.basename(other)))
-        notes = ""
-        if keep_notes:
-            notes = " ".join(idx["slides"][n - 1]["notes"]).replace("\n", "\\n")
-        ops.append({"op": "imageslide", "path": image_of[n], "notes": notes or "-"})
-    return kn_deck_ops(src, dst, ops, timeout=timeout, **kw)
-
-
 def kn_merge_slides(src, dst, from_deck, slides):
     """Copy slides from another deck into this one, writing a NEW deck at dst.
 

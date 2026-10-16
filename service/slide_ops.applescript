@@ -12,8 +12,6 @@
 --   copyslide <srcDeckPath> <slide>              copy a slide IN from another deck
 --                                                (Keynote 12.2.1 REFUSES this; kept so
 --                                                 the failure is reported precisely)
---   imageslide <imagePath> <notes>               append a slide made from an image file
---                                                ("\n" allowed in notes, "-" = none)
 -- Items are indexed as Keynote reports them (1-based, per slide).
 on run argv
 	if (count of argv) < 3 then error "usage: slide_ops.applescript DECK OUT OPSFILE [TIMEOUT]"
@@ -109,14 +107,6 @@ on run argv
 							close otherDoc saving no
 						end try
 						if copyErr is not "" then error copyErr number -1717
-
-					else if opName is "imageslide" then
-						set imgPath to item 2 of f
-						set noteText to item 3 of f
-						make image slides theDoc files {POSIX file imgPath} without set titles
-						if noteText is not "-" then
-							set presenter notes of last slide of theDoc to noteText
-						end if
 
 					else
 						error "unknown op: " & opName

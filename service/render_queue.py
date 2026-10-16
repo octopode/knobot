@@ -167,7 +167,7 @@ OP_FIELDS = {"dupslide": ("slide", "count"),
              "dupitem": ("slide", "index", "to_slide"),
              "delitem": ("slide", "index"),
              "copyslide": ("deck", "slide"),
-             "imageslide": ("path", "notes")}
+             }
 
 
 def validate_op(o):
@@ -200,7 +200,7 @@ def validate_op(o):
                              % ALLOWED_ROOT)
         if not os.path.isfile(other):
             raise ValueError("source deck not found: %s" % other)
-    if name in ("image", "imageslide"):
+    if name == "image":
         path = str(o["path"])
         if not os.path.isabs(path) or not within(path, ALLOWED_ROOT):
             raise ValueError("image path must be absolute and under %s" % ALLOWED_ROOT)
@@ -221,13 +221,12 @@ def write_ops_file(ops, work):
             shutil.copyfile(str(o["deck"]), local)
             clear_xattrs(local)
             vals = [local, o["slide"]]
-        elif name in ("image", "imageslide"):
+        elif name == "image":
             src = str(o["path"])
             local = os.path.join(work, "img%02d%s" % (i, os.path.splitext(src)[1].lower()))
             shutil.copyfile(src, local)
             clear_xattrs(local)
-            vals = ([local, o["notes"] or "-"] if name == "imageslide"
-                    else [o["slide"], o["x"], o["y"], o["width"], o["height"], local])
+            vals = [o["slide"], o["x"], o["y"], o["width"], o["height"], local]
         else:
             vals = [o[k] for k in OP_FIELDS[name]]
         lines.append("\t".join([name] + [str(v) for v in vals]))

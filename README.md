@@ -110,13 +110,13 @@ Keynote itself, because deep-copying a slide's protobuf graph is the risky part.
 - **Adding an image from a file on disk — WORKS.** `kn_add_image(deck, out, slide=5,
   path="/abs/photo.png", x=…, y=…, width=…)` puts a picture on an existing slide, via
   Keynote's `make new image`. Verified, and the bytes are embedded in the saved deck.
-- **Picture IMPORT of whole slides — BROKEN in Keynote 12.2.1, not by us.** The separate
-  command `make image slides`, which turns image files into NEW slides (the intended
-  fallback for remixing a foreign-theme deck slide-by-slide), **crashes Keynote** on
-  12.2.1. Every image tried killed it, including the same files `make new image` places
-  without complaint moments earlier, so the fault is the command, not the image. The
-  helper raises instead of taking Keynote down, and cross-theme remixing therefore has no
-  fallback yet.
+- **Picture IMPORT of whole slides — REMOVED, because it crashes Keynote 12.2.1.** The
+  separate command `make image slides`, which turns image files into NEW slides (the
+  intended fallback for remixing a foreign-theme deck), kills the app for every image
+  tried — including the same files `make new image` places without complaint moments
+  earlier, so the fault is the command, not the image. The helper, the service op and its
+  AppleScript branch have all been deleted rather than left as a trap, so cross-theme
+  remixing has no fallback for now.
 
 Not yet: inserting a blank slide (duplicate a template instead), replacing an existing
 image in place (ADDING one works; `file` is read-only after creation, so swapping means

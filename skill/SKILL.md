@@ -162,10 +162,10 @@ verified by finding a `datas` entry with the source file's exact sha1 digest and
 NOT possible: replacing an image in place (delete it and make a new one in the same
 frame), and duplicating an existing item at all (-1717, see above).
 
-Do not confuse `kn_add_image` with PICTURE IMPORT. Adding an image file to an existing
-slide (`make new image`) works and is verified. Turning image files into NEW slides
-(`make image slides`, the cross-theme fallback) crashes Keynote 12.2.1 -- different
-command, different outcome. See the merge section.
+Do not confuse this with PICTURE IMPORT, which was REMOVED (see the merge section):
+adding an image file to an existing slide (`make new image`) works; turning image files
+into NEW slides (`make image slides`) crashes Keynote 12.2.1. Different commands,
+different outcomes.
 
 ## Rendering and SKIPPED slides
 
@@ -221,12 +221,19 @@ The on-disk name is the `datas` entry's `fileName` (`<stem>-<id><ext>`), NOT
 style objects, so the decks must be derived from the same original or share a theme with
 the same style object ids. A foreign theme raises with the unresolvable style ids listed
 (verified against an unrelated 188-slide deck) rather than producing a deck that renders
-wrong. For genuinely foreign decks there is currently NO working fallback:
-`kn_import_slides_as_images` raises, because `make image slides` -- the command that
-turns image FILES into NEW SLIDES -- **crashes Keynote 12.2.1** (-609) for every image
-tried, large or small, including the very files `kn_add_image` places successfully in the
-same session. The crash is that command, and it says nothing about adding an image to an
-existing slide, which works (see "Adding content" above). The
+wrong. For genuinely foreign decks there is currently NO fallback. There was a picture-import
+helper; it has been REMOVED, because `make image slides` -- the command that turns image
+FILES into NEW SLIDES -- **crashes Keynote 12.2.1** (-609) for every image tried, large
+or small, including the very files `kn_add_image` places successfully in the same
+session. The crash is that command, so the helper, the service `imageslide` op and its
+AppleScript branch are all gone rather than left as a trap. Do not add them back without
+new evidence from a later Keynote.
+
+This says nothing about adding an image to an existing slide, which works (see "Adding
+content" above).
+
+A replacement fallback can be built from verified primitives -- duplicate a slide, delete
+its items, add the rendered PNG full-bleed -- but it is not written. The
 primitives for a replacement all work (duplicate a slide, delete its items, add the
 rendered PNG full-bleed) but that helper is not written.
 
