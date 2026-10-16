@@ -154,16 +154,27 @@ def kn_render(deck, fmt="png", timeout=900, wait=True, poll=2.0, stages=False):
 def kn_stage_map(deck, n_images=None):
     """Map exported images to slides when rendering with stages=True.
 
-    Keynote writes one image per build stage, in slide order. A slide with
-    buildEventCount N contributes N+1 images (initial state plus one per event), so the
-    LAST image of each group is the fully built slide. Returns
-    [{"slide": n, "builds": N, "first": i, "last": j}, ...] with 1-based image indices.
-    Pass n_images to assert the mapping matches what was actually exported."""
+    Keynote writes one image per build stage in slide order, so a slide with
+    buildEventCount N contributes N+1 images and the LAST of each group is the fully
+    built slide. Returns [{"slide", "builds", "first", "last"}] with 1-based indices.
+
+    Raises if any slide's build count is UNKNOWN -- Keynote's own save (so any deck
+    written by kn_duplicate_slides) omits buildEventCount and records only
+    hasExplicitBuilds, and guessing would silently misattribute images. For such decks
+    render WITHOUT stages: that already gives each slide's FINAL state, which is what
+    layout review needs."""
     idx = kn_index(deck)
+    unknown = [s["n"] for s in idx["slides"] if s.get("builds") is None]
+    if unknown:
+        raise ValueError(
+            "build counts unavailable for slide(s) %s (Keynote-saved deck): cannot map "
+            "stages to slides. Render without stages=True -- a default render is each "
+            "slide's final built state." % unknown[:10])
     out, cursor = [], 1
     for s in idx["slides"]:
-        n = (s.get("builds") or 0) + 1
-        out.append({"slide": s["n"], "builds": n - 1, "first": cursor, "last": cursor + n - 1})
+        n = s["builds"] + 1
+        out.append({"slide": s["n"], "builds": s["builds"], "first": cursor,
+                    "last": cursor + n - 1})
         cursor += n
     total = cursor - 1
     if n_images is not None and n_images != total:
@@ -171,6 +182,98 @@ def kn_stage_map(deck, n_images=None):
                          "the builds-per-slide assumption is wrong for this deck"
                          % (total, n_images))
     return out
+
+
+def kn_slide_ops(src, dst, delete=None, order=None):
+    """Delete and/or reorder slides, writing a NEW deck at dst.
+
+    Runs scripts/kn_slide_ops.py in the `keynote` env (keynote-parser's codec), which
+    rewrites only KN.ShowArchive.slideTree.slides in Index/Document.iwa and copies every
+    other zip member through byte-for-byte: fast on GB decks, no YAML, no media
+    rewriting, build animations preserved.
+
+    delete: slide numbers (1-based, as kn_index reports) to drop.
+    order:  new sequence of slide numbers, e.g. [3, 1, 2]; a partial list is allowed and
+            unnamed slides keep their relative order after the named ones.
+    Deleted slides' archives remain as orphans, so the file does not shrink.
+    Returns the new slide count. Always RENDER the result before trusting it."""
+    src_r, dst_r = os.path.realpath(src), os.path.realpath(dst)
+    if src_r == dst_r:
+        raise ValueError("dst must differ from src; originals are never edited in place")
+    if os.path.exists(dst):
+        raise FileExistsError("refusing to overwrite existing %s" % dst)
+    if any(dst_r.startswith(os.path.realpath(x) + os.sep) for x in KN_PROTECTED_DIRS):
+        raise ValueError("refusing to write into a protected folder: %s" % dst)
+    kn_preflight(src)
+    os.makedirs(os.path.dirname(dst_r), exist_ok=True)
+    script = os.path.join(kn_skill_dir(), "scripts", "kn_slide_ops.py")
+    spec = json.dumps({"delete": list(delete or []), "order": list(order or [])})
+    p = subprocess.run([os.path.join(KN_BIN, "python"), script, src_r, dst_r, spec],
+                       capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError("kn_slide_ops failed: %s" % (p.stderr or p.stdout)[-2000:])
+    res = json.loads(p.stdout)
+    got = kn_index(dst)["n_slides"]
+    if got != res["n_slides"]:
+        raise RuntimeError("wrote %d slides but the new deck reports %d" % (res["n_slides"], got))
+    return got
+
+
+def kn_duplicate_slides(src, dst, spec, timeout=1800, poll=2.0):
+    """Duplicate slides inside a deck, writing a NEW deck at dst.
+
+    Done by KEYNOTE, not by rewriting archives: deep-copying a slide's protobuf graph
+    (new ids for every shape, style and build) is the risky part, and Keynote's own
+    `duplicate` command gets it right, builds included.
+
+    spec: "3x2" = two copies of slide 3; "3x2,7x1" = also one copy of slide 7. Copies are
+    APPENDED AT THE END of the deck (verified), not inserted after their source, so the
+    existing numbering is unchanged. Follow with kn_slide_ops(order=...) to move them
+    into place.
+
+    NOTE: the saved deck loses buildEventCount (Keynote writes only hasExplicitBuilds),
+    so kn_stage_map will refuse to map stages on the result. Builds themselves survive.
+
+    Needs the keynote-render service (same queue as kn_render). Returns dst."""
+    req_dir = os.path.join(KN_RENDER_ROOT, "requests")
+    if not os.path.isdir(req_dir):
+        raise RuntimeError("render queue missing (%s); is keynote-render installed?" % req_dir)
+    src_r, dst_r = os.path.realpath(src), os.path.abspath(dst)
+    if src_r == dst_r:
+        raise ValueError("dst must differ from src; originals are never edited in place")
+    if os.path.exists(dst_r):
+        raise FileExistsError("refusing to overwrite existing %s" % dst_r)
+    if any(dst_r.startswith(os.path.realpath(x) + os.sep) for x in KN_PROTECTED_DIRS):
+        raise ValueError("refusing to write into a protected folder: %s" % dst_r)
+    kn_preflight(src)
+    job = "d%s-%s" % (time.strftime("%Y%m%d-%H%M%S"), uuid.uuid4().hex[:6])
+    tmp = os.path.join(KN_RENDER_ROOT, ".%s.tmp" % job)
+    with open(tmp, "w") as fh:
+        json.dump({"job": job, "action": "duplicate", "input": src_r, "spec": spec,
+                   "output": dst_r, "timeout": int(timeout)}, fh)
+    os.replace(tmp, os.path.join(req_dir, job + ".json"))
+    try:
+        os.utime(req_dir, None)
+    except OSError:
+        pass
+    status = os.path.join(KN_RENDER_ROOT, "status", job + ".json")
+    deadline = time.time() + timeout + 120
+    while time.time() < deadline:
+        if os.path.exists(status):
+            st = json.load(open(status))
+            if st["state"] == "done":
+                if not os.path.exists(dst_r):
+                    raise RuntimeError("handler reported done but %s is missing" % dst_r)
+                return dst_r
+            if st["state"] == "error":
+                raise RuntimeError("duplicate %s failed: %s" % (job, st.get("error")))
+        else:
+            rej = [f for f in os.listdir(os.path.join(KN_RENDER_ROOT, "rejected"))
+                   if f.startswith(job)]
+            if rej:
+                raise RuntimeError("request rejected; see %s/render.log" % KN_RENDER_ROOT)
+        time.sleep(poll)
+    raise TimeoutError("duplicate %s did not finish within %ss" % (job, timeout + 120))
 
 
 def kn_contact_sheet(images, out_path, cols=4, thumb_w=480, start=1):

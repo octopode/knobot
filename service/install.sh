@@ -18,6 +18,7 @@ mkdir -p "$APP" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
 mkdir -p "$ROOT"/{requests,renders,status,work,rejected}
 install -m 0644 "$SRC/render_queue.py" "$APP/render_queue.py"
 install -m 0644 "$SRC/export_slides.applescript" "$APP/export_slides.applescript"
+install -m 0644 "$SRC/slide_ops.applescript" "$APP/slide_ops.applescript"
 rm -f "$APP/export_slides.js"
 install -m 0644 "$SRC/local.keynote-render.plist" "$PLIST"
 plutil -lint "$PLIST"

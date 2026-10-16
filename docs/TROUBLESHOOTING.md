@@ -12,7 +12,9 @@ Read in this order; the first two need no help from the user.
 | `-1700 Can't convert types` | `render.log` | JXA-style enums; the exporter must be AppleScript |
 | `EXDEV` / `Cross-device link` | `render.log` | moving outputs across volumes; use the copy-then-delete path |
 | macOS prompts on every render | — | add the env interpreter to Full Disk Access |
-| a slide looks empty or half-finished | `kn_index` → `builds` | it has a build; re-render with `stages=True` and use `kn_stage_map` |
+| a slide looks empty or half-finished | compare with a `stages=True` render | a default render is already the final stage, so this is usually real |
+| `kn_stage_map` raises "build counts unavailable" | `kn_index` → `builds` is `None` | the deck was saved by Keynote (e.g. by `kn_duplicate_slides`); render without stages |
+| duplicated slides are not where you asked | — | Keynote appends copies at the end; follow with `kn_slide_ops(order=...)` |
 | text is in the file but missing from the render | the render is authoritative | Keynote's own layout clips it; report the render |
 
 ## Known-good numbers (Keynote 12.2.1, 158 MB / 65-slide deck)
@@ -20,4 +22,6 @@ Read in this order; the first two need no help from the user.
 - 3-slide deck: ~24 s per render
 - 65 slides: ~28-32 s, 65 images
 - 65 slides with `stages=True`: 78 images (11 built slides), ~28 s
+- delete+reorder 65 -> 5 slides: ~6 s (no Keynote)
+- duplicate 2 slides via Keynote: ~18 s
 - `kn_index`: ~2 s; `kn_replace`: ~4 s

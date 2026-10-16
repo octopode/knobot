@@ -94,7 +94,11 @@ def main():
                 if gm:
                     shapes.append({"id": ident, "type": t, **gm})
         rec = {"n": i, "file": fname, "skipped": bool(n.get("isSkipped")),
-               "builds": int(n.get("buildEventCount") or 0),
+               # Keynote's own save omits buildEventCount and records only
+               # hasExplicitBuilds, so None means UNKNOWN, not zero.
+               "builds": (int(n["buildEventCount"]) if n.get("buildEventCount") is not None
+                          else None),
+               "has_builds": bool(n.get("hasExplicitBuilds") or n.get("hasBuilds")),
                "body": body, "notes": notes}
         if want_geom:
             rec["shapes"] = shapes

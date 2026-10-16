@@ -68,18 +68,27 @@ idx = kn_index(deck)                         # ordered slides, text, notes, buil
 hits = kn_find(deck, "old wording")          # which slides mention it
 dst  = kn_new_copy_path(deck, "edit")        # never edit an original
 kn_replace(deck, dst, [("old wording", "new wording")])
-imgs = kn_render(dst, stages=True)           # Keynote exports it; stages for builds
-smap = kn_stage_map(dst, n_images=len(imgs)) # which image is each slide's final state
-host.view_image(imgs[smap[1]["last"] - 1])   # look at it
+
+dup = kn_duplicate_slides(deck, out, "3x2")  # 2 copies of slide 3, appended at the end
+kn_slide_ops(dup, out2, delete=[9], order=[1, 6, 2])   # reorder / drop slides
+
+imgs = kn_render(out2)                       # one image per slide, FINAL build stage
+host.view_image(imgs[0])                     # look at it
 ```
 
 ## Scope
 
-Works: reading structure/text/notes/geometry, text find-and-replace, rendering to
-PNG/JPEG/PDF, build stages, contact sheets.
-Not yet: adding/reordering slides, replacing images, editing tables or charts,
-package-style (directory) decks. Raw unpack→pack structural editing is possible but
-untrusted — see SKILL.md. New decks from scratch: `python-pptx` (Keynote imports .pptx).
+Works: reading structure/text/notes/geometry/builds, text find-and-replace, **slide
+delete, reorder and duplicate**, rendering to PNG/JPEG/PDF, build stages, contact sheets.
+
+Delete and reorder are done at the file level — slide order is a single list of
+references, so only that list is rewritten and every other zip member is copied through
+byte-for-byte (~6 s on a 158 MB deck, Keynote not involved). Duplication is done by
+Keynote itself, because deep-copying a slide's protobuf graph is the risky part.
+
+Not yet: inserting a blank slide (duplicate a template instead), replacing images,
+editing tables or charts, package-style (directory) decks. New decks from scratch:
+`python-pptx` (Keynote imports .pptx).
 
 ## Credits
 

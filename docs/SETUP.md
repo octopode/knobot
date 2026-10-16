@@ -55,6 +55,21 @@ input must be a `.key` under the allowed root, job id and format are whitelisted
    `/Applications/Keynote.app/Contents/Resources/Keynote.sdef` — parse that XML for the
    installed version's exact parameters. The `sdef` command needs full Xcode.
 
+## Slide operations
+
+`duplicate`, `delete`, `move` and `save` come from the Cocoa Standard Suite that Keynote
+inherits (`/System/Library/ScriptingDefinitions/CocoaStandard.sdef`) — they are NOT in
+Keynote.sdef, so parsing that file alone makes them look unavailable.
+
+Two measured quirks of Keynote's own save:
+- `duplicate` **appends copies at the end** of the deck, not after the source slide.
+- The saved file **omits `buildEventCount`**, keeping only `hasExplicitBuilds`. Builds
+  still work, but any stage↔slide mapping derived from counts is impossible on such a
+  deck, so `kn_stage_map` refuses rather than guessing.
+
+Delete and reorder do not need Keynote at all: slide order is
+`KN.ShowArchive.slideTree.slides` in `Index/Document.iwa`.
+
 ## Failure modes worth recognising
 
 - **A run of fast, identical failures usually means a modal dialog** is waiting on the
@@ -67,6 +82,12 @@ input must be a `.key` under the allowed root, job id and format are whitelisted
   `QueueDirectories` does NOT work here at all; it never fired once.
 - **The agent cannot read `~/Library`**, so a failed clone there is not inspectable.
   `status/<job>.json` and `render.log` (both under `teaching/`) carry the error instead.
+
+## Render semantics
+
+A default render writes ONE image per slide and it is that slide's **final** build stage
+(verified byte-identical to the last image of a `stages=True` export). `stages=True`
+exports every stage, so the image count equals `sum(buildEventCount + 1)`.
 
 ## Diagnosing by hand
 

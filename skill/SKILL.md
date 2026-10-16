@@ -10,10 +10,11 @@ local MCP connectors and localhost are all blocked), so never try osascript, JXA
 or a Keynote connector. Rendering goes through a queue that the user's own
 LaunchAgent serves outside the sandbox.
 
-Status: v1.0. Validated end to end 2026-10-16 on Keynote 12.2.1 with a real 65-slide,
-158 MB deck: `kn_replace` round-trips and reopens cleanly; the render loop produced
-correct 1920x1080 PNGs on six consecutive runs (65 slides in ~28 s); build-stage export
-matched its predicted image count exactly (78 images for 65 slides, 11 built).
+Status: v1.1. Validated end to end 2026-10-16 on Keynote 12.2.1 with a real 65-slide,
+158 MB deck: `kn_replace` round-trips and reopens cleanly; rendering produced correct
+1920x1080 PNGs on nine consecutive runs (65 slides in ~28 s); build-stage export matched
+its predicted image count exactly (78 images for 65 slides, 11 built); delete+reorder and
+duplicate were each verified by rendering the result.
 
 ## Hard rules
 
@@ -28,12 +29,9 @@ matched its predicted image count exactly (78 images for 65 slides, 11 built).
    They are written by Keynote on save and are stale after any edit. Render.
 4. **Do not `rm` in granted folders.** Leave old work files for the user; the
    render handler prunes its own outputs (keeps the newest 40 jobs).
-5. **Do NOT use raw unpack -> edit -> pack yet.** It silently corrupts text LAYOUT:
-   after a round-trip Keynote rendered a two-paragraph title as its first word only
-   ("Combing" instead of "Combing Transcriptomes / FOR SECRETS OF DEEP-SEA SURVIVAL"),
-   while `kn_index` still showed the full string -- the text survives, the paragraph
-   bookkeeping Keynote lays out from does not. `kn_replace` is unaffected (keynote-parser
-   fixes that bookkeeping itself). Verify any structural edit by RENDERING it.
+5. **Verify every structural edit by RENDERING it.** `kn_index` reads the file; only a
+   render shows what Keynote draws, and the two can disagree (see the workflow note on
+   clipped text).
 
 ## Environment
 
@@ -53,7 +51,9 @@ matched its predicted image count exactly (78 images for 65 slides, 11 built).
 | `kn_new_copy_path(src, suffix)` | fresh timestamped path in `KN_WORK_DIR` |
 | `kn_replace(src, dst, [(find, repl), ...], regex=False)` | batch text replace into NEW file `dst`; returns keynote-parser's "Replaced ..." lines (empty means nothing matched) |
 | `kn_render(deck, fmt="png"\|"jpeg"\|"pdf", timeout=900, stages=False)` | Keynote export via the queue; returns `[.../slide-001.png, ...]` or `[<job>.pdf]` |
-| `kn_stage_map(deck, n_images=None)` | with `stages=True`, maps images to slides: `[{slide, builds, first, last}]`, `last` = fully built |
+| `kn_stage_map(deck, n_images=None)` | with `stages=True`, maps images to slides: `[{slide, builds, first, last}]`, `last` = fully built; REFUSES when build counts are unknown |
+| `kn_slide_ops(src, dst, delete=[...], order=[...])` | delete and/or reorder slides into a NEW deck (file-level, ~6 s on a 158 MB deck, no Keynote) |
+| `kn_duplicate_slides(src, dst, "3x2")` | duplicate slides via Keynote itself; copies are APPENDED at the end |
 | `kn_contact_sheet(images, out_path, cols=4)` | labelled overview grid of many slides |
 | `kn_offslide(index, n, margin=2)` | shapes whose box crosses the slide edge (needs geometry) |
 
@@ -65,20 +65,18 @@ matched its predicted image count exactly (78 images for 65 slides, 11 built).
 3. **Edit** into a new file: `dst = kn_new_copy_path(deck, "edit")`, then
    `kn_replace(deck, dst, pairs)`. Check the report: one line per changed text
    storage. Then `kn_find(dst, new_text)` to confirm.
-4. **Render and inspect**: `after = kn_render(dst)`. **If any slide you touched has
-   builds (`kn_index` -> `builds` > 0), render with `stages=True`** and use
-   `kn_stage_map` to find each slide's FINAL image: a default render gives one image per
-   slide, which for a built slide is its first stage, with later content not yet
-   revealed. Verified on a real deck: slide 2's first stage showed only the heading, the
-   final stage showed all three list items. Mistaking that for missing content is the
-   easiest wrong call this skill can make.
+4. **Render and inspect**: `after = kn_render(dst)`. A default render gives ONE image
+   per slide and it is that slide's FINAL build stage (verified byte-identical to the
+   last stage image), which is what layout review wants. Use `stages=True` only to see
+   intermediate stages; then `kn_stage_map` says which images belong to which slide.
    Look at every slide you changed with `host.view_image(path)` (crop to zoom); use
    `kn_contact_sheet` for a whole-deck pass. Compare against `before`. Check for:
    text overflow or clipping, text auto-shrunk too small, wrapped titles pushing
    into other objects, overlaps between text and images, anything past the slide edge.
    Keynote's own layout can clip text the file contains in full (seen on a real title
    slide: stored "Combing Transcriptomes / FOR SECRETS OF DEEP-SEA SURVIVAL", rendered
-   "Combing"), so report what the RENDER shows, not what `kn_index` reports.
+   "Combing" -- confirmed by the user as how Keynote really draws it), so report what
+   the RENDER shows, not what `kn_index` reports.
 5. **Fix and repeat** from step 3 (always from the last good file, into a new path)
    until clean. Report the final path and which slides changed.
 
@@ -93,28 +91,50 @@ matched its predicted image count exactly (78 images for 65 slides, 11 built).
 - Longer replacement text does NOT resize boxes: Keynote reflows on open, and
   that is exactly what rendering catches.
 
-## Structural edits (beyond text): unpack -> edit YAML -> pack  [UNSAFE, v0.2]
+## Structural edits: delete, reorder, duplicate
 
-This path WORKS mechanically but corrupts text layout -- see Hard rule 5. Deleting
-slides by trimming `KN.ShowArchive.slideTree.slides` in `Index/Document.iwa.yaml` and
-repacking produced a deck Keynote opens and `kn_index` reports correctly, yet the title
-rendered as one word. Until the paragraph-style bookkeeping is handled, use it only for
-throwaway test decks, and always render the result.
+**Delete and reorder — `kn_slide_ops`, file-level.** Slide order is one list of
+references (`KN.ShowArchive.slideTree.slides` in `Index/Document.iwa`). The helper
+rewrites only that list with keynote-parser's codec and copies every other zip member
+through byte-for-byte: no unpack, no YAML, no media rewriting. ~6 s on a 158 MB deck,
+Keynote not involved. Build animations and content are untouched (verified: a 65->5
+slide cut reordered to [5,4,1,2,3] kept build counts 1 and 3 on the right slides and
+rendered in the requested order). Deleted slides leave orphan archives behind, so the
+file does not shrink. Decks whose slideTree nests slides are refused rather than
+mangled.
 
-Mechanics, for when that is fixed: `keynote-parser unpack DECK -o DIR` writes
-`Index/*.iwa.yaml` plus `Data/` media; `keynote-parser pack DIR -o NEW.key` rebuilds.
-`kn_index(..., geometry=True)` gives the slide file and shape ids;
-`keynote-parser cat DECK Index/Slide-478.iwa` decodes one member (note `.iwa`, not
-`.iwa.yaml`). Trimming the slide list leaves orphan archives and media in place, so the
-file does not shrink. Unpacking copies all media -- GB decks need that much scratch.
+**Duplicate — `kn_duplicate_slides`, via Keynote.** Deep-copying a slide's protobuf
+graph (fresh ids for every shape, style and build) is the risky part, so Keynote's own
+`duplicate` command does it, through the same service queue as rendering. Verified:
+`"4x2"` on a 5-slide deck gave 7 slides whose copies render identically to the source
+and still animate (a stages render returned 17 images for 7 slides).
 
-`keynote_parser.file_utils.dump_yaml` returns BYTES. Write with `open(path, "wb")` to a
-temp file and `os.replace` it in: `open(path, "w").write(dump_yaml(d))` truncates the
-file before the TypeError fires and destroys it.
+Two consequences worth knowing:
+- Copies are **appended at the END**, not inserted after the source. Existing numbering
+  is unchanged; follow with `kn_slide_ops(order=...)` to place them.
+- Keynote's save **omits `buildEventCount`**, recording only `hasExplicitBuilds`. So on
+  any deck it wrote, `kn_index` reports `builds: None` (unknown, not zero) and
+  `kn_stage_map` refuses to map stages. Builds still work; just render without
+  `stages=True`, which gives final states anyway.
 
-Not supported in v0.2: adding/reordering slides, replacing images, editing tables or
-charts, package-style (directory) decks. New decks from scratch: python-pptx in the
-`keynote` env (Keynote imports .pptx).
+**Template workflow** (duplicate a template slide, edit the copy, place it):
+```python
+dup = kn_duplicate_slides(deck, kn_new_copy_path(deck, "dup"), "3x1")   # copy -> last
+kn_replace(dup, (ed := kn_new_copy_path(deck, "text")), [("PLACEHOLDER", "real text")])
+kn_slide_ops(ed, (final := kn_new_copy_path(deck, "final")), order=[1, 2, 8, 3])
+kn_render(final)                                                        # then LOOK
+```
+
+**Raw `unpack` -> edit YAML -> `pack`** also works and does NOT corrupt text (an early
+claim to the contrary was disproved by a control render of the untouched original), but
+`kn_slide_ops` supersedes it for order changes: no media round-trip, no YAML. If you do
+use it, note `keynote_parser.file_utils.dump_yaml` returns BYTES -- write with
+`open(path, "wb")` to a temp file and `os.replace` it in, since `open(path, "w")`
+truncates the file before the TypeError fires and destroys it.
+
+Still unsupported: inserting a blank slide (duplicate a template instead), replacing
+images, editing tables or charts, package-style (directory) decks. New decks from
+scratch: python-pptx in the `keynote` env (Keynote imports .pptx).
 
 ## Rendering service (keynote-render)
 

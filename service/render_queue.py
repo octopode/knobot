@@ -26,6 +26,9 @@ ROOT = os.environ.get("KR_ROOT", "/Users/impactus/thermofiles/teaching/_keynote_
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXPORT_CMD = json.loads(os.environ["KR_EXPORT_CMD"]) if "KR_EXPORT_CMD" in os.environ else [
     "/usr/bin/osascript", os.path.join(HERE, "export_slides.applescript")]
+OPS_CMD = json.loads(os.environ["KR_OPS_CMD"]) if "KR_OPS_CMD" in os.environ else [
+    "/usr/bin/osascript", os.path.join(HERE, "slide_ops.applescript")]
+SPEC_RE = re.compile(r"^\d+x\d+(,\d+x\d+)*$")
 JOB_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 FORMATS = {"png": "png", "jpeg": "jpeg", "pdf": "pdf"}
 KEEP_RENDERS = 40
@@ -124,7 +127,22 @@ def parse_request(path):
     if os.path.exists(d("renders", job)) or os.path.exists(d("status", job + ".json")):
         raise ValueError("job id already used: %s" % job)
     stages = bool(req.get("stages", False))
-    return job, os.path.realpath(inp), fmt, timeout, stages
+    action = str(req.get("action", "render"))
+    if action not in ("render", "duplicate"):
+        raise ValueError("action must be 'render' or 'duplicate'")
+    spec = out = None
+    if action == "duplicate":
+        spec = str(req.get("spec", ""))
+        if not SPEC_RE.match(spec):
+            raise ValueError("spec must look like '3x2' or '3x2,7x1', got %r" % spec)
+        out = str(req.get("output", ""))
+        if not out.lower().endswith(".key") or not os.path.isabs(out):
+            raise ValueError("duplicate needs an absolute .key 'output' path")
+        if not within(out, ALLOWED_ROOT) or within(out, ROOT):
+            raise ValueError("output must be under %s and outside the render folder" % ALLOWED_ROOT)
+        if os.path.exists(out):
+            raise ValueError("output already exists: %s" % out)
+    return job, os.path.realpath(inp), fmt, timeout, stages, action, spec, out
 
 
 def clone(src, dst):
@@ -217,7 +235,7 @@ def run_export(job, deck, target, fmt, timeout, work, t0, grace=OPEN_GRACE_S, st
     return proc.returncode, tail
 
 
-def run_job(job, inp, fmt, timeout, stages=False):
+def run_job(job, inp, fmt, timeout, stages=False, action="render", spec=None, out_path=None):
     # ONE fixed staging folder, reused for every job and cleared on entry. A per-job
     # subfolder made macOS re-prompt for access to Keynote's container on every render;
     # a constant path should need the grant only once. Cleared at the START (not after a
@@ -240,6 +258,22 @@ def run_job(job, inp, fmt, timeout, stages=False):
             target = os.path.join(work, "export")
             os.makedirs(target)
         time.sleep(SETTLE_S)
+        if action == "duplicate":
+            staged_out = os.path.join(work, "out.key")
+            p = subprocess.run(OPS_CMD + [deck, staged_out, spec, str(max(30, timeout - 30))],
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               universal_newlines=True, timeout=timeout)
+            if p.returncode != 0:
+                raise RuntimeError("duplicate failed (rc=%d): %s" % (p.returncode, p.stdout.strip()[-1500:]))
+            if not os.path.exists(staged_out):
+                raise RuntimeError("Keynote reported success but no file was saved")
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            move_across(staged_out, out_path)
+            write_status(job, {"state": "done", "input": inp, "action": action, "spec": spec,
+                               "elapsed_s": round(time.time() - t0, 1),
+                               "n_outputs": 1, "outputs": [out_path]})
+            log("DONE %s duplicate %s -> %s" % (job, spec, out_path))
+            return
         for attempt in range(1, OPEN_RETRIES + 1):
             rc, tail = run_export(job, deck, target, fmt, timeout, work, t0, stages=stages)
             if rc == 0:
@@ -297,7 +331,8 @@ def run_job(job, inp, fmt, timeout, stages=False):
         # Only clear the clone on success. After a failure Keynote may still have the
         # file open; deleting it is what leaves "can't be opened right now" dialogs
         # that then block every later job. prune() removes it once it is cold.
-        if os.path.isdir(d("renders", job)):
+        if os.path.isdir(d("renders", job)) or (action == "duplicate" and out_path
+                                                 and os.path.exists(out_path)):
             shutil.rmtree(work, ignore_errors=True)   # tidy after success; failures are
                                                       # left for the next job to clear
         partial = d("renders", job + ".partial")
@@ -328,12 +363,12 @@ def main():
         for name in entries:
             path = d("requests", name)
             try:
-                job, inp, fmt, timeout, stages = parse_request(path)
+                job, inp, fmt, timeout, stages, action, spec, out = parse_request(path)
             except Exception as e:  # noqa: BLE001
                 reject(path, e)
                 continue
             os.remove(path)
-            run_job(job, inp, fmt, timeout, stages)
+            run_job(job, inp, fmt, timeout, stages, action, spec, out)
     prune()
     return 0
 
