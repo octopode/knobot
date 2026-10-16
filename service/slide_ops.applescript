@@ -113,7 +113,7 @@ on run argv
 					else if opName is "imageslide" then
 						set imgPath to item 2 of f
 						set noteText to item 3 of f
-						make image slides theDoc with files {POSIX file imgPath} without set titles
+						make image slides theDoc files {POSIX file imgPath} without set titles
 						if noteText is not "-" then
 							set presenter notes of last slide of theDoc to noteText
 						end if

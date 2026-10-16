@@ -14,6 +14,20 @@ if [ ! -x "$PY" ]; then
   echo "edit PY in this script and ProgramArguments in the plist to another python3." >&2
   exit 1
 fi
+# Compile-check the AppleScripts BEFORE installing them. A single syntax error makes
+# osascript fail at RUN time for every op in the file (renders use a separate script and
+# keep working), which is an expensive way to discover a typo. osacompile resolves
+# Keynote's terminology only outside a sandbox, so this check belongs here.
+for S in export_slides.applescript slide_ops.applescript; do
+  if ! osacompile -o /tmp/kr-syntax-check.scpt "$SRC/$S" 2>/tmp/kr-syntax-check.err; then
+    echo "ERROR: $S does not compile; nothing was installed." >&2
+    cat /tmp/kr-syntax-check.err >&2
+    rm -f /tmp/kr-syntax-check.scpt /tmp/kr-syntax-check.err
+    exit 1
+  fi
+done
+rm -f /tmp/kr-syntax-check.scpt /tmp/kr-syntax-check.err
+
 mkdir -p "$APP" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
 mkdir -p "$ROOT"/{requests,renders,status,work,rejected}
 install -m 0644 "$SRC/render_queue.py" "$APP/render_queue.py"
