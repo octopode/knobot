@@ -162,6 +162,11 @@ verified by finding a `datas` entry with the source file's exact sha1 digest and
 NOT possible: replacing an image in place (delete it and make a new one in the same
 frame), and duplicating an existing item at all (-1717, see above).
 
+Do not confuse `kn_add_image` with PICTURE IMPORT. Adding an image file to an existing
+slide (`make new image`) works and is verified. Turning image files into NEW slides
+(`make image slides`, the cross-theme fallback) crashes Keynote 12.2.1 -- different
+command, different outcome. See the merge section.
+
 ## Rendering and SKIPPED slides
 
 Keynote omits skipped slides from an export -- correctly, but it means **image k is the
@@ -217,9 +222,11 @@ style objects, so the decks must be derived from the same original or share a th
 the same style object ids. A foreign theme raises with the unresolvable style ids listed
 (verified against an unrelated 188-slide deck) rather than producing a deck that renders
 wrong. For genuinely foreign decks there is currently NO working fallback:
-`kn_import_slides_as_images` raises, because `make image slides` **crashes Keynote
-12.2.1** (-609) for every image tried, large or small, including paths that
-`make new image` reads happily in the same session. The crash is the command itself. The
+`kn_import_slides_as_images` raises, because `make image slides` -- the command that
+turns image FILES into NEW SLIDES -- **crashes Keynote 12.2.1** (-609) for every image
+tried, large or small, including the very files `kn_add_image` places successfully in the
+same session. The crash is that command, and it says nothing about adding an image to an
+existing slide, which works (see "Adding content" above). The
 primitives for a replacement all work (duplicate a slide, delete its items, add the
 rendered PNG full-bleed) but that helper is not written.
 

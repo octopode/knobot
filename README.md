@@ -105,12 +105,22 @@ references, so only that list is rewritten and every other zip member is copied 
 byte-for-byte (~6 s on a 158 MB deck, Keynote not involved). Duplication is done by
 Keynote itself, because deep-copying a slide's protobuf graph is the risky part.
 
-Broken in Keynote 12.2.1, not by us: `make image slides` (picture import) **crashes the
-app** for any image, so cross-theme remixing has no fallback yet; the helper raises
-instead of taking Keynote down.
+**Two different things, do not confuse them:**
 
-Not yet: inserting a blank slide (duplicate a template instead), replacing images,
-editing tables or charts, package-style (directory) decks, merging across different
+- **Adding an image from a file on disk — WORKS.** `kn_add_image(deck, out, slide=5,
+  path="/abs/photo.png", x=…, y=…, width=…)` puts a picture on an existing slide, via
+  Keynote's `make new image`. Verified, and the bytes are embedded in the saved deck.
+- **Picture IMPORT of whole slides — BROKEN in Keynote 12.2.1, not by us.** The separate
+  command `make image slides`, which turns image files into NEW slides (the intended
+  fallback for remixing a foreign-theme deck slide-by-slide), **crashes Keynote** on
+  12.2.1. Every image tried killed it, including the same files `make new image` places
+  without complaint moments earlier, so the fault is the command, not the image. The
+  helper raises instead of taking Keynote down, and cross-theme remixing therefore has no
+  fallback yet.
+
+Not yet: inserting a blank slide (duplicate a template instead), replacing an existing
+image in place (ADDING one works; `file` is read-only after creation, so swapping means
+delete-then-add in the same frame), editing tables or charts, package-style (directory) decks, merging across different
 themes, and duplicating an individual text box or image — Keynote refuses to copy items
 even within one document, so that helper reports the failure instead of faking it. New decks from scratch:
 `python-pptx` (Keynote imports .pptx).
