@@ -132,9 +132,13 @@ def parse_request(path):
         raise ValueError("action must be 'render' or 'duplicate'")
     spec = out = None
     if action == "duplicate":
-        spec = str(req.get("spec", ""))
-        if not SPEC_RE.match(spec):
-            raise ValueError("spec must look like '3x2' or '3x2,7x1', got %r" % spec)
+        spec = req.get("ops")
+        if not isinstance(spec, list) or not spec:
+            raise ValueError("'ops' must be a non-empty list of operations")
+        if len(spec) > 500:
+            raise ValueError("too many operations (%d); cap is 500" % len(spec))
+        for o in spec:
+            validate_op(o)
         out = str(req.get("output", ""))
         if not out.lower().endswith(".key") or not os.path.isabs(out):
             raise ValueError("duplicate needs an absolute .key 'output' path")
@@ -155,6 +159,82 @@ def clone(src, dst):
             shutil.copytree(src, dst)
         else:
             shutil.copy2(src, dst)
+
+
+OP_FIELDS = {"dupslide": ("slide", "count"),
+             "text": ("slide", "x", "y", "width", "text"),
+             "image": ("slide", "x", "y", "width", "height", "path"),
+             "dupitem": ("slide", "index", "to_slide"),
+             "delitem": ("slide", "index"),
+             "copyslide": ("deck", "slide"),
+             "imageslide": ("path", "notes")}
+
+
+def validate_op(o):
+    """Reject anything the AppleScript would mis-parse, before Keynote ever sees it."""
+    if not isinstance(o, dict):
+        raise ValueError("each op must be an object, got %r" % type(o).__name__)
+    name = o.get("op")
+    if name not in OP_FIELDS:
+        raise ValueError("unknown op %r; expected one of %s" % (name, sorted(OP_FIELDS)))
+    for key in OP_FIELDS[name]:
+        if key not in o:
+            raise ValueError("op %s is missing %r" % (name, key))
+    for key in OP_FIELDS[name]:
+        if key in ("text", "path", "deck", "notes"):
+            v = str(o[key])
+            if "\t" in v or "\n" in v or "\r" in v:
+                raise ValueError("op %s: %r may not contain tabs or raw newlines "
+                                 "(use the two characters \\n for a line break)" % (name, key))
+        else:
+            if name == "dupitem" and key == "index" and o[key] == -1:
+                continue        # -1 = last item on the slide
+            if not isinstance(o[key], int) or isinstance(o[key], bool):
+                raise ValueError("op %s: %r must be an integer, got %r" % (name, key, o[key]))
+    if name == "copyslide":
+        other = str(o["deck"])
+        if not other.lower().endswith(".key") or not os.path.isabs(other):
+            raise ValueError("copyslide needs an absolute .key 'deck' path")
+        if not within(other, ALLOWED_ROOT) or within(other, ROOT):
+            raise ValueError("source deck must be under %s and outside the render folder"
+                             % ALLOWED_ROOT)
+        if not os.path.isfile(other):
+            raise ValueError("source deck not found: %s" % other)
+    if name in ("image", "imageslide"):
+        path = str(o["path"])
+        if not os.path.isabs(path) or not within(path, ALLOWED_ROOT):
+            raise ValueError("image path must be absolute and under %s" % ALLOWED_ROOT)
+        if not os.path.isfile(path):
+            raise ValueError("image not found: %s" % path)
+
+
+def write_ops_file(ops, work):
+    """Serialise ops to the TSV the AppleScript reads.
+
+    Image files and source decks are copied into the staging folder first: Keynote reads
+    them from its own container, the same place it reads the deck being edited."""
+    lines = []
+    for i, o in enumerate(ops):
+        name = o["op"]
+        if name == "copyslide":
+            local = os.path.join(work, "src%02d.key" % i)
+            shutil.copyfile(str(o["deck"]), local)
+            clear_xattrs(local)
+            vals = [local, o["slide"]]
+        elif name in ("image", "imageslide"):
+            src = str(o["path"])
+            local = os.path.join(work, "img%02d%s" % (i, os.path.splitext(src)[1].lower()))
+            shutil.copyfile(src, local)
+            clear_xattrs(local)
+            vals = ([local, o["notes"] or "-"] if name == "imageslide"
+                    else [o["slide"], o["x"], o["y"], o["width"], o["height"], local])
+        else:
+            vals = [o[k] for k in OP_FIELDS[name]]
+        lines.append("\t".join([name] + [str(v) for v in vals]))
+    path = os.path.join(work, "ops.tsv")
+    with open(path, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return path
 
 
 def clear_xattrs(path):
@@ -260,7 +340,8 @@ def run_job(job, inp, fmt, timeout, stages=False, action="render", spec=None, ou
         time.sleep(SETTLE_S)
         if action == "duplicate":
             staged_out = os.path.join(work, "out.key")
-            p = subprocess.run(OPS_CMD + [deck, staged_out, spec, str(max(30, timeout - 30))],
+            ops_file = write_ops_file(spec, work)
+            p = subprocess.run(OPS_CMD + [deck, staged_out, ops_file, str(max(30, timeout - 30))],
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                universal_newlines=True, timeout=timeout)
             if p.returncode != 0:
@@ -269,10 +350,11 @@ def run_job(job, inp, fmt, timeout, stages=False, action="render", spec=None, ou
                 raise RuntimeError("Keynote reported success but no file was saved")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             move_across(staged_out, out_path)
-            write_status(job, {"state": "done", "input": inp, "action": action, "spec": spec,
+            write_status(job, {"state": "done", "input": inp, "action": action,
+                               "ops": [o["op"] for o in spec],
                                "elapsed_s": round(time.time() - t0, 1),
                                "n_outputs": 1, "outputs": [out_path]})
-            log("DONE %s duplicate %s -> %s" % (job, spec, out_path))
+            log("DONE %s ops=%s -> %s" % (job, [o["op"] for o in spec], out_path))
             return
         for attempt in range(1, OPEN_RETRIES + 1):
             rc, tail = run_export(job, deck, target, fmt, timeout, work, t0, stages=stages)
@@ -352,7 +434,36 @@ def prune():
             pass
 
 
+def suppress_restore_prompt():
+    """Keep a Keynote crash from wedging the next job.
+
+    After a crash macOS offers to reopen the documents that were open at the time, and
+    that modal blocks the `open` command of the next render indefinitely. The answer is
+    always no here, and the deck in the restore list may be the very file that crashed
+    Keynote. Both keys are asserted on every pass because a Keynote upgrade or a
+    Preferences reset can quietly restore the default.
+    """
+    for key, val in (("NSQuitAlwaysKeepsWindows", "false"),
+                     ("ApplePersistenceIgnoreState", "true")):
+        try:
+            subprocess.run(["/usr/bin/defaults", "write", "com.apple.iWork.Keynote",
+                            key, "-bool", val], capture_output=True, timeout=20)
+        except Exception as e:  # noqa: BLE001
+            log("could not set %s: %s" % (key, e))
+    saved = os.path.expanduser(
+        "~/Library/Saved Application State/com.apple.iWork.Keynote.savedState")
+    if os.path.isdir(saved):
+        # Window-position state only. Removing it drops a pending restore request; it is
+        # recreated by Keynote as needed.
+        try:
+            shutil.rmtree(saved)
+            log("cleared a pending Keynote restore request")
+        except Exception as e:  # noqa: BLE001
+            log("could not clear saved state: %s" % e)
+
+
 def main():
+    suppress_restore_prompt()
     for sub in ("requests", "renders", "status", "work", "rejected"):
         os.makedirs(d(sub), exist_ok=True)
     os.makedirs(STAGE, exist_ok=True)

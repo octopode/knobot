@@ -14,9 +14,15 @@ KN_PROTECTED_DIRS = ("/Users/impactus/thermofiles/teaching/pastslides",)
 
 
 def kn_skill_dir():
+    """Where scripts/ lives. Normally the loaded skill's own directory; set KN_SKILL_DIR
+    (global or environment) to run this kernel from a checkout instead."""
+    override = globals().get("KN_SKILL_DIR") or os.environ.get("KN_SKILL_DIR")
+    if override:
+        return os.path.realpath(override)
     here = os.path.dirname(sys._getframe().f_code.co_filename)
     if not here:
-        raise RuntimeError("keynote-files skill dir unavailable in this runtime")
+        raise RuntimeError("keynote-files skill dir unavailable in this runtime; "
+                           "set KN_SKILL_DIR to the directory holding scripts/")
     return here
 
 
@@ -219,25 +225,33 @@ def kn_slide_ops(src, dst, delete=None, order=None):
     return got
 
 
-def kn_duplicate_slides(src, dst, spec, timeout=1800, poll=2.0):
-    """Duplicate slides inside a deck, writing a NEW deck at dst.
+def kn_deck_ops(src, dst, ops, timeout=1800, poll=2.0):
+    """Structural edits performed by KEYNOTE, writing a NEW deck at dst.
 
-    Done by KEYNOTE, not by rewriting archives: deep-copying a slide's protobuf graph
-    (new ids for every shape, style and build) is the risky part, and Keynote's own
-    `duplicate` command gets it right, builds included.
+    Deep-copying a slide's protobuf graph (fresh ids for every shape, style and build)
+    is the risky part, so Keynote's own commands do it, through the render service queue.
 
-    spec: "3x2" = two copies of slide 3; "3x2,7x1" = also one copy of slide 7. Copies are
-    APPENDED AT THE END of the deck (verified), not inserted after their source, so the
-    existing numbering is unchanged. Follow with kn_slide_ops(order=...) to move them
-    into place.
+    ops is a list of dicts, applied in order:
+      {"op": "dupslide", "slide": 4, "count": 2}                  copies land at the END
+      {"op": "text",  "slide": 1, "x": 80, "y": 600, "width": 700, "text": "Hello"}
+      {"op": "image", "slide": 1, "x": 80, "y": 100, "width": 400, "height": 0,
+                      "path": "/abs/path.png"}                    0 = keep natural size
+      {"op": "dupitem", "slide": 2, "index": 1, "to_slide": 5}    copy an item across
+      {"op": "delitem", "slide": 2, "index": 3}
+      {"op": "copyslide", "deck": "/abs/other.key", "slide": 7}   from ANOTHER deck
+    Coordinates are slide points (kn_index(..., geometry=True) reports the same units;
+    the deck's canvas size is index["slide_size"]). Text may contain "\\n" for a line
+    break but no tabs. Images must live under the teaching folder; the handler copies
+    them into Keynote's container itself.
 
-    NOTE: the saved deck loses buildEventCount (Keynote writes only hasExplicitBuilds),
-    so kn_stage_map will refuse to map stages on the result. Builds themselves survive.
-
-    Needs the keynote-render service (same queue as kn_render). Returns dst."""
+    The saved deck loses buildEventCount (Keynote writes only hasExplicitBuilds), so
+    kn_stage_map will refuse on the result; builds themselves survive.
+    ALWAYS render the result and look at it. Returns dst."""
     req_dir = os.path.join(KN_RENDER_ROOT, "requests")
     if not os.path.isdir(req_dir):
         raise RuntimeError("render queue missing (%s); is keynote-render installed?" % req_dir)
+    if not ops:
+        raise ValueError("no operations given")
     src_r, dst_r = os.path.realpath(src), os.path.abspath(dst)
     if src_r == dst_r:
         raise ValueError("dst must differ from src; originals are never edited in place")
@@ -249,7 +263,7 @@ def kn_duplicate_slides(src, dst, spec, timeout=1800, poll=2.0):
     job = "d%s-%s" % (time.strftime("%Y%m%d-%H%M%S"), uuid.uuid4().hex[:6])
     tmp = os.path.join(KN_RENDER_ROOT, ".%s.tmp" % job)
     with open(tmp, "w") as fh:
-        json.dump({"job": job, "action": "duplicate", "input": src_r, "spec": spec,
+        json.dump({"job": job, "action": "duplicate", "input": src_r, "ops": list(ops),
                    "output": dst_r, "timeout": int(timeout)}, fh)
     os.replace(tmp, os.path.join(req_dir, job + ".json"))
     try:
@@ -266,14 +280,138 @@ def kn_duplicate_slides(src, dst, spec, timeout=1800, poll=2.0):
                     raise RuntimeError("handler reported done but %s is missing" % dst_r)
                 return dst_r
             if st["state"] == "error":
-                raise RuntimeError("duplicate %s failed: %s" % (job, st.get("error")))
+                raise RuntimeError("deck ops %s failed: %s" % (job, st.get("error")))
         else:
             rej = [f for f in os.listdir(os.path.join(KN_RENDER_ROOT, "rejected"))
                    if f.startswith(job)]
             if rej:
                 raise RuntimeError("request rejected; see %s/render.log" % KN_RENDER_ROOT)
         time.sleep(poll)
-    raise TimeoutError("duplicate %s did not finish within %ss" % (job, timeout + 120))
+    raise TimeoutError("deck ops %s did not finish within %ss" % (job, timeout + 120))
+
+
+def kn_duplicate_slides(src, dst, spec, timeout=1800, poll=2.0):
+    """Duplicate whole slides. spec "3x2" = two copies of slide 3; "3x2,7x1" adds one of
+    slide 7. Copies are APPENDED AT THE END (verified), so existing numbering is
+    unchanged -- follow with kn_slide_ops(order=...) to place them."""
+    ops = []
+    for part in spec.split(","):
+        n, _, k = part.partition("x")
+        ops.append({"op": "dupslide", "slide": int(n), "count": int(k)})
+    return kn_deck_ops(src, dst, ops, timeout=timeout, poll=poll)
+
+
+def kn_add_text(src, dst, slide, text, x, y, width, **kw):
+    """Add one text box to a slide. Coordinates and width in slide points."""
+    return kn_deck_ops(src, dst, [{"op": "text", "slide": int(slide), "x": int(x),
+                                   "y": int(y), "width": int(width), "text": text}], **kw)
+
+
+def kn_add_image(src, dst, slide, path, x, y, width=0, height=0, **kw):
+    """Add one image to a slide. width/height 0 keeps the image's natural size."""
+    return kn_deck_ops(src, dst, [{"op": "image", "slide": int(slide), "x": int(x),
+                                   "y": int(y), "width": int(width), "height": int(height),
+                                   "path": os.path.realpath(path)}], **kw)
+
+
+def kn_duplicate_item(src, dst, slide, index, to_slide, **kw):
+    """Copy one item (text box, image, shape...) onto another slide, appended there.
+    `index` is the item's 1-based position as Keynote lists it on that slide."""
+    return kn_deck_ops(src, dst, [{"op": "dupitem", "slide": int(slide), "index": int(index),
+                                   "to_slide": int(to_slide)}], **kw)
+
+
+def kn_import_slides_as_images(src, dst, from_deck, slides, keep_notes=True,
+                               timeout=1800, **kw):
+    """Remix across decks: bring slides in from another deck as PICTURE slides.
+
+    Keynote 12.2.1 refuses to copy slides or items between documents over AppleScript
+    ("Text items can not be copied", and cross-document references go invalid), so this
+    renders the wanted slides with Keynote and appends them to the target deck with
+    `make image slides`. Speaker notes are carried across as text when keep_notes.
+
+    WHAT YOU GET: pixel-exact slides, appended at the END, that are NOT editable -- no
+    text, no builds, no object structure. Good for reusing a finished slide verbatim;
+    wrong if you need to edit the words afterwards. For editable reuse, work within a
+    single deck (kn_duplicate_slides) or open both decks and copy by hand in Keynote.
+
+    slides: 1-based slide numbers in from_deck."""
+    other = os.path.realpath(from_deck)
+    idx = kn_index(other)
+    imgs = kn_render(other, fmt="png", timeout=timeout)
+    if len(imgs) != idx["n_slides"]:
+        raise RuntimeError("rendered %d images for %d slides; cannot map slides to images"
+                           % (len(imgs), idx["n_slides"]))
+    ops = []
+    for n in slides:
+        if not 1 <= int(n) <= len(imgs):
+            raise ValueError("slide %r is outside %s (1-%d)" % (n, other, len(imgs)))
+        notes = ""
+        if keep_notes:
+            notes = " ".join(idx["slides"][int(n) - 1]["notes"]).replace("\n", "\\n")
+        ops.append({"op": "imageslide", "path": imgs[int(n) - 1], "notes": notes or "-"})
+    return kn_deck_ops(src, dst, ops, timeout=timeout, **kw)
+
+
+def kn_merge_slides(src, dst, from_deck, slides):
+    """Copy slides from another deck into this one, writing a NEW deck at dst.
+
+    This is the file-level equivalent of dragging slides between presentations, and the
+    only one available: Keynote's own `duplicate` refuses cross-document copies (-1717 /
+    invalid reference), and `make image slides` flattens slides to pictures.
+
+    Each merged slide's OWN objects (drawables, text, builds) are copied with fresh
+    identifiers into a new component; the styles they use are referenced where they
+    already live in the target, which is what "keep source formatting" means here. So the
+    decks must share a theme lineage -- derived from the same original, or the same theme
+    with the same style object ids. A foreign theme raises with the unresolvable styles
+    listed rather than producing a deck that renders wrong.
+
+    Media is matched by content digest: identical bytes already in the target are
+    referenced, never re-registered. This is load-bearing, not an optimisation -- a second
+    `datas` entry whose digest duplicates an existing one makes Keynote crash on open.
+
+    slides: source slide numbers, 1-based as kn_index reports them, e.g. [20, 21].
+            Merged slides are appended in that order; reorder afterwards with
+            kn_slide_ops(order=...).
+    Returns the merge report: per-slide object/reference/media counts and the validator's
+    reference-integrity checks. Always RENDER the result before trusting it."""
+    src_r, dst_r, from_r = (os.path.realpath(p) for p in (src, dst, from_deck))
+    if src_r == dst_r:
+        raise ValueError("dst must differ from src; originals are never edited in place")
+    if os.path.exists(dst):
+        raise FileExistsError("refusing to overwrite existing %s" % dst)
+    if any(dst_r.startswith(os.path.realpath(x) + os.sep) for x in KN_PROTECTED_DIRS):
+        raise ValueError("refusing to write into a protected folder: %s" % dst)
+    kn_preflight(src)
+    kn_preflight(from_deck)
+    nums = [int(n) for n in slides]
+    if not nums:
+        raise ValueError("no slides given")
+    n_from = kn_index(from_deck)["n_slides"]
+    bad = [n for n in nums if not 1 <= n <= n_from]
+    if bad:
+        raise ValueError("slides %s outside %s (1-%d)" % (bad, os.path.basename(from_deck), n_from))
+    before = kn_index(src)["n_slides"]
+    os.makedirs(os.path.dirname(dst_r), exist_ok=True)
+    script = os.path.join(kn_skill_dir(), "scripts", "kn_merge.py")
+    p = subprocess.run([os.path.join(KN_BIN, "python"), script, src_r, from_r, dst_r,
+                        json.dumps(nums)], capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError("kn_merge failed: %s" % (p.stderr or p.stdout)[-2000:])
+    res = json.loads(p.stdout)
+    if res.get("unresolved_styles"):
+        raise RuntimeError("source styles absent from the target (the decks do not share "
+                           "a theme lineage): %s" % json.dumps(res["unresolved_styles"]))
+    got = kn_index(dst)["n_slides"]
+    if got != before + len(nums):
+        raise RuntimeError("expected %d slides, the new deck reports %d"
+                           % (before + len(nums), got))
+    if res.get("media_not_found_in_source") or res.get("n_missing_media"):
+        raise RuntimeError("media did not land: %s" % json.dumps(
+            {k: res[k] for k in ("media_not_found_in_source", "n_missing_media")}))
+    res["n_slides"] = got
+    return res
 
 
 def kn_contact_sheet(images, out_path, cols=4, thumb_w=480, start=1):

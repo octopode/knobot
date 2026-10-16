@@ -54,6 +54,7 @@ duplicate were each verified by rendering the result.
 | `kn_stage_map(deck, n_images=None)` | with `stages=True`, maps images to slides: `[{slide, builds, first, last}]`, `last` = fully built; REFUSES when build counts are unknown |
 | `kn_slide_ops(src, dst, delete=[...], order=[...])` | delete and/or reorder slides into a NEW deck (file-level, ~6 s on a 158 MB deck, no Keynote) |
 | `kn_duplicate_slides(src, dst, "3x2")` | duplicate slides via Keynote itself; copies are APPENDED at the end |
+| `kn_merge_slides(src, dst, from_deck, [20, 21])` | copy slides from ANOTHER deck into a NEW deck at `dst` (file-level); returns per-slide object/media counts; requires a shared theme lineage |
 | `kn_contact_sheet(images, out_path, cols=4)` | labelled overview grid of many slides |
 | `kn_offslide(index, n, margin=2)` | shapes whose box crosses the slide edge (needs geometry) |
 
@@ -133,8 +134,72 @@ use it, note `keynote_parser.file_utils.dump_yaml` returns BYTES -- write with
 truncates the file before the TypeError fires and destroys it.
 
 Still unsupported: inserting a blank slide (duplicate a template instead), replacing
-images, editing tables or charts, package-style (directory) decks. New decks from
+images, editing tables or charts, package-style (directory) decks, and duplicating an
+individual item (text box or image) -- Keynote refuses to copy items even within one
+document ("Text items can not be copied" / "Images can not be copied", -1717), so
+`kn_duplicate_item` reports that failure rather than working around it. New decks from
 scratch: python-pptx in the `keynote` env (Keynote imports .pptx).
+
+## Cross-deck merge: `kn_merge_slides`
+
+Keynote itself cannot do this. `duplicate` refuses any cross-document copy ("Text items
+can not be copied", -1717) and a cross-document slide reference goes invalid mid-script
+(-609), so the merge happens at the file level: each merged slide's OWN objects
+(drawables, text storages, builds) are copied with fresh identifiers into a new
+component, and the styles they use are referenced where they already live in the target.
+That is the file-level equivalent of "keep source formatting".
+
+Verified end to end: slides 20-21 of a 65-slide deck merged into a 5-slide working copy
+gave 7 slides whose merged renders are **byte-identical** to the source deck's renders
+of those slides (md5 match, 0 of 2,073,600 pixels differing), builds preserved
+(`builds: 1` on both).
+
+**Three invariants govern the package.** They are not guesses -- each was isolated by
+building a deck that adds exactly one thing and rendering it:
+
+1. A slide component's `identifier` IS its root `KN.SlideArchive`'s object id (true for
+   all 65 components in the reference deck), and the Document component references each
+   slide component as a bare `{"componentIdentifier": ...}`.
+2. A slide component does NOT own the styles its shapes use: those live in the document
+   stylesheet component and are declared in the slide component's `externalReferences`
+   (~50 entries for a typical slide). Copying the stylesheet into a slide component
+   inverts that ownership.
+3. Every archive carries its own header, and `messageInfos[].type` governs payload
+   decoding -- a copied archive must keep its source header (remapped), never a template's.
+
+**The crash rule: media is deduplicated by digest.** Adding a `datas` entry whose
+`digest` duplicates one already in the deck makes Keynote **crash on open** (-609
+"Connection is invalid" at the `open` command, before any export). A lone duplicate-digest
+entry is enough; new components and copied archives are accepted happily. So
+`kn_merge_slides` matches source media by digest and REFERENCES bytes the target already
+holds, registering only genuinely new media (a unique-digest entry opens fine).
+The on-disk name is the `datas` entry's `fileName` (`<stem>-<id><ext>`), NOT
+`preferredFileName`, which is a display name and is not unique.
+
+**Requirement: a shared theme lineage.** Merged slides reference the target's existing
+style objects, so the decks must be derived from the same original or share a theme with
+the same style object ids. A foreign theme raises with the unresolvable style ids listed
+(verified against an unrelated 188-slide deck) rather than producing a deck that renders
+wrong. For genuinely foreign decks the fallback is
+`kn_import_slides_as_images` (picture import; editable text is lost) -- implemented but
+NOT yet exercised end to end, and it needs the service's `imageslide` op installed.
+
+```python
+rep = kn_merge_slides(deck, (m := kn_new_copy_path(deck, "merged")), other_deck, [20, 21])
+kn_slide_ops(m, (final := kn_new_copy_path(deck, "final")), order=[1, 6, 7, 2, 3])
+kn_render(final)                                                        # then LOOK
+```
+
+Debugging note: `kn_merge.py` validates the file it wrote (reference integrity, media
+presence, undeclared cross-component references) because a bad reference costs a Keynote
+crash to discover. Interpret those counts as a DELTA against the untouched deck -- a
+healthy 65-slide deck already reports 28 unresolved references and ~1050 undeclared
+cross-component references.
+
+One library gotcha: `IWAFile.from_dict` consumes/mutates the dict passed to it, so reuse
+of a member dict for a second file needs `copy.deepcopy`. And `Index/Metadata.iwa` does
+NOT round-trip byte-identically (a no-op decode/encode grows it ~48 bytes); that is
+harmless -- a control deck rewritten this way renders fine.
 
 ## Rendering service (keynote-render)
 

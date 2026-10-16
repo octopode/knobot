@@ -16,6 +16,35 @@ Read in this order; the first two need no help from the user.
 | `kn_stage_map` raises "build counts unavailable" | `kn_index` → `builds` is `None` | the deck was saved by Keynote (e.g. by `kn_duplicate_slides`); render without stages |
 | duplicated slides are not where you asked | — | Keynote appends copies at the end; follow with `kn_slide_ops(order=...)` |
 | text is in the file but missing from the render | the render is authoritative | Keynote's own layout clips it; report the render |
+| **Keynote CRASHES on `open`** (`-609 Connection is invalid` at char offset of the `open` command) | the merge report's `datas` changes | a new media registry entry whose `digest` duplicates one already in the deck. Reference the existing data id instead; `kn_merge_slides` does this automatically |
+| "reopen the documents you had open?" modal after a crash | — | window restoration; the service now asserts `NSQuitAlwaysKeepsWindows=false` and `ApplePersistenceIgnoreState=true` on every pass and clears a pending restore request |
+| merge raises "source styles absent from target" | the listed style object ids | the decks do not share a theme lineage; merged slides reference the target's styles. Use `kn_import_slides_as_images` or rebuild the slide in the target theme |
+| merged deck has the right slides but `kn_index` cannot parse it | — | a copied archive was written under a template's header; each archive must keep its OWN header (`messageInfos[].type` governs decoding) |
+
+## Finding a crash cause without a crash report
+
+Keynote's crash reports are not readable from the agent sandbox (`~/Library/Logs/
+DiagnosticReports` does not exist for this user; `/Library/Logs/DiagnosticReports` is
+permission-denied even for a Full-Disk-Access interpreter), so the loop is: the
+AppleScript error carries a CHARACTER OFFSET, and resolving it against the script says
+whether Keynote died at `open` or during `export`. That alone separates "the file is
+rejected" from "the export failed".
+
+From there, bisect by building decks that add exactly ONE thing to a known-good deck and
+rendering each. For the merge, that isolated the cause in four renders:
+
+| probe | adds | result |
+|---|---|---|
+| V1 | bump `lastObjectIdentifier` | opens |
+| V2 | one `datas` entry (duplicate digest) + its file | **crash** |
+| V3 | a new component + 18 copied archives | opens |
+| V4 | V3 plus the slide node in `Document.iwa` | opens |
+| V5 | a `datas` entry with a UNIQUE digest, conventional `fileName`, registered in `dataReferences` | opens |
+
+Validate reference integrity in Python before asking Keynote to open anything, and read
+the counts as a DELTA against the untouched deck: a healthy 65-slide deck already reports
+28 unresolved references and ~1050 undeclared cross-component references, so only an
+increase means anything.
 
 ## Known-good numbers (Keynote 12.2.1, 158 MB / 65-slide deck)
 
@@ -25,3 +54,5 @@ Read in this order; the first two need no help from the user.
 - delete+reorder 65 -> 5 slides: ~6 s (no Keynote)
 - duplicate 2 slides via Keynote: ~18 s
 - `kn_index`: ~2 s; `kn_replace`: ~4 s
+- cross-deck merge of 2 slides (328 archives copied): ~10 s, then ~25 s to render 7 slides
+- a merged slide renders byte-identically to the source deck's render of it (md5 match)

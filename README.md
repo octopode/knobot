@@ -15,7 +15,7 @@ fails for one of those reasons.
 
 keynotebot works around all of it:
 
-- **Editing** happens on the FILE, inside the sandbox, with
+- **Editing** (including cross-deck slide merges) happens on the FILE, inside the sandbox, with
   [`keynote-parser`](https://github.com/psobot/keynote-parser) — no app involved.
 - **Rendering** happens outside the sandbox: the agent drops a JSON request in a watched
   folder, a LaunchAgent on the Mac has Keynote export the slides, and the PNGs land where
@@ -72,14 +72,29 @@ kn_replace(deck, dst, [("old wording", "new wording")])
 dup = kn_duplicate_slides(deck, out, "3x2")  # 2 copies of slide 3, appended at the end
 kn_slide_ops(dup, out2, delete=[9], order=[1, 6, 2])   # reorder / drop slides
 
-imgs = kn_render(out2)                       # one image per slide, FINAL build stage
+kn_merge_slides(out2, out3, other_deck, [20, 21])      # copy slides BETWEEN decks
+
+imgs = kn_render(out3)                       # one image per slide, FINAL build stage
 host.view_image(imgs[0])                     # look at it
 ```
 
 ## Scope
 
 Works: reading structure/text/notes/geometry/builds, text find-and-replace, **slide
-delete, reorder and duplicate**, rendering to PNG/JPEG/PDF, build stages, contact sheets.
+delete, reorder, duplicate and cross-deck merge**, rendering to PNG/JPEG/PDF, build
+stages, contact sheets.
+
+Cross-deck merge (`kn_merge_slides`) is also file-level, because Keynote refuses every
+cross-document copy: `duplicate` reports "Text items can not be copied" (-1717) and a
+cross-document slide reference goes invalid mid-script (-609). Each merged slide's own
+objects are copied with fresh identifiers into a new component and keep referencing the
+target's existing styles, which requires the decks to share a theme lineage — a foreign
+theme is refused with the unresolvable style ids rather than rendered wrong. Verified:
+merged slides render **byte-identically** to the source deck's renders of them.
+
+One rule is load-bearing: Keynote deduplicates media by content digest, and registering a
+second `datas` entry for bytes the deck already holds makes it **crash on open**. Media
+is therefore matched by digest and referenced, not copied.
 
 Delete and reorder are done at the file level — slide order is a single list of
 references, so only that list is rewritten and every other zip member is copied through
@@ -87,7 +102,9 @@ byte-for-byte (~6 s on a 158 MB deck, Keynote not involved). Duplication is done
 Keynote itself, because deep-copying a slide's protobuf graph is the risky part.
 
 Not yet: inserting a blank slide (duplicate a template instead), replacing images,
-editing tables or charts, package-style (directory) decks. New decks from scratch:
+editing tables or charts, package-style (directory) decks, merging across different
+themes, and duplicating an individual text box or image — Keynote refuses to copy items
+even within one document, so that helper reports the failure instead of faking it. New decks from scratch:
 `python-pptx` (Keynote imports .pptx).
 
 ## Credits
