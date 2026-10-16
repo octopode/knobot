@@ -54,6 +54,8 @@ duplicate were each verified by rendering the result.
 | `kn_stage_map(deck, n_images=None)` | with `stages=True`, maps images to slides: `[{slide, builds, first, last}]`, `last` = fully built; REFUSES when build counts are unknown |
 | `kn_slide_ops(src, dst, delete=[...], order=[...])` | delete and/or reorder slides into a NEW deck (file-level, ~6 s on a 158 MB deck, no Keynote) |
 | `kn_duplicate_slides(src, dst, "3x2")` | duplicate slides via Keynote itself; copies are APPENDED at the end |
+| `kn_add_text(src, dst, slide, text, x, y, width)` | add a NEW text box via Keynote (verified) |
+| `kn_add_image(src, dst, slide, path, x, y, width=0, height=0)` | add a NEW image from a file on disk via Keynote (verified; the bytes are EMBEDDED in the saved deck, not linked) |
 | `kn_merge_slides(src, dst, from_deck, [20, 21])` | copy slides from ANOTHER deck into a NEW deck at `dst` (file-level); returns per-slide object/media counts; requires a shared theme lineage |
 | `kn_contact_sheet(images, out_path, cols=4)` | labelled overview grid of many slides |
 | `kn_offslide(index, n, margin=2)` | shapes whose box crosses the slide edge (needs geometry) |
@@ -140,6 +142,40 @@ document ("Text items can not be copied" / "Images can not be copied", -1717), s
 `kn_duplicate_item` reports that failure rather than working around it. New decks from
 scratch: python-pptx in the `keynote` env (Keynote imports .pptx).
 
+## Adding content: text boxes and images
+
+Both verified end to end through the service on Keynote 12.2.1:
+
+```python
+kn_add_text(deck, out, slide=5, text="New label", x=120, y=80, width=600)
+kn_add_image(deck, out2, slide=5, path="/abs/photo.png", x=1180, y=620, width=620)
+```
+
+`make new image with properties {file:POSIX file p, position:{x, y}}` -- width/height are
+set AFTER creation (0 keeps the natural size), because the `file` property is read-only
+once the image exists. Keynote opens the path itself, so it must be a real path on the
+Mac that Keynote can read (anywhere under `~/thermofiles/teaching` works); write anything
+generated in the sandbox there first. The file's bytes are embedded in the saved deck:
+verified by finding a `datas` entry with the source file's exact sha1 digest and a
+`Data/` member byte-identical to it, so merged and edited decks stay self-contained.
+
+NOT possible: replacing an image in place (delete it and make a new one in the same
+frame), and duplicating an existing item at all (-1717, see above).
+
+## Rendering and SKIPPED slides
+
+Keynote omits skipped slides from an export -- correctly, but it means **image k is the
+k-th NON-SKIPPED slide, not slide k**. A 188-slide deck with 9 skipped slides renders 179
+images. Map through `kn_index`'s `skipped` flags before pairing images with slide numbers:
+
+```python
+shown = [s["n"] for s in kn_index(deck)["slides"] if not s["skipped"]]
+image_of = dict(zip(shown, imgs))
+```
+
+`kn_stage_map` does NOT account for skipped slides; treat its output as unreliable on a
+deck that has any.
+
 ## Cross-deck merge: `kn_merge_slides`
 
 Keynote itself cannot do this. `duplicate` refuses any cross-document copy ("Text items
@@ -180,9 +216,12 @@ The on-disk name is the `datas` entry's `fileName` (`<stem>-<id><ext>`), NOT
 style objects, so the decks must be derived from the same original or share a theme with
 the same style object ids. A foreign theme raises with the unresolvable style ids listed
 (verified against an unrelated 188-slide deck) rather than producing a deck that renders
-wrong. For genuinely foreign decks the fallback is
-`kn_import_slides_as_images` (picture import; editable text is lost) -- implemented but
-NOT yet exercised end to end, and it needs the service's `imageslide` op installed.
+wrong. For genuinely foreign decks there is currently NO working fallback:
+`kn_import_slides_as_images` raises, because `make image slides` **crashes Keynote
+12.2.1** (-609) for every image tried, large or small, including paths that
+`make new image` reads happily in the same session. The crash is the command itself. The
+primitives for a replacement all work (duplicate a slide, delete its items, add the
+rendered PNG full-bleed) but that helper is not written.
 
 ```python
 rep = kn_merge_slides(deck, (m := kn_new_copy_path(deck, "merged")), other_deck, [20, 21])

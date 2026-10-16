@@ -81,8 +81,12 @@ host.view_image(imgs[0])                     # look at it
 ## Scope
 
 Works: reading structure/text/notes/geometry/builds, text find-and-replace, **slide
-delete, reorder, duplicate and cross-deck merge**, rendering to PNG/JPEG/PDF, build
-stages, contact sheets.
+delete, reorder, duplicate and cross-deck merge**, **adding text boxes and images from
+files on disk**, rendering to PNG/JPEG/PDF, build stages, contact sheets.
+
+An added image is embedded in the saved deck, not linked (verified by digest against the
+source file), so decks stay self-contained. Keynote omits skipped slides from exports, so
+image k is the k-th non-skipped slide — map through `kn_index`'s `skipped` flags.
 
 Cross-deck merge (`kn_merge_slides`) is also file-level, because Keynote refuses every
 cross-document copy: `duplicate` reports "Text items can not be copied" (-1717) and a
@@ -100,6 +104,10 @@ Delete and reorder are done at the file level — slide order is a single list o
 references, so only that list is rewritten and every other zip member is copied through
 byte-for-byte (~6 s on a 158 MB deck, Keynote not involved). Duplication is done by
 Keynote itself, because deep-copying a slide's protobuf graph is the risky part.
+
+Broken in Keynote 12.2.1, not by us: `make image slides` (picture import) **crashes the
+app** for any image, so cross-theme remixing has no fallback yet; the helper raises
+instead of taking Keynote down.
 
 Not yet: inserting a blank slide (duplicate a template instead), replacing images,
 editing tables or charts, package-style (directory) decks, merging across different
