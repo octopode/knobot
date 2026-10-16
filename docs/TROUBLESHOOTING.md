@@ -59,4 +59,6 @@ increase means anything.
 - duplicate 2 slides via Keynote: ~18 s
 - `kn_index`: ~2 s; `kn_replace`: ~4 s
 - cross-deck merge of 2 slides (328 archives copied): ~10 s, then ~25 s to render 7 slides
+- add image + add text box in one job: ~38 s including the render (regression-tested
+  after the picture-import removal: both landed at the requested frames)
 - a merged slide renders byte-identically to the source deck's render of it (md5 match)
