@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.keynote-render</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/impactus/.claude-science/conda/envs/keynote/bin/python3.12</string>
+    <string>/Users/impactus/Library/Application Support/keynote-render/render_queue.py</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PYTHONDONTWRITEBYTECODE</key><string>1</string></dict>
+  <key>WatchPaths</key>
+  <array><string>/Users/impactus/thermofiles/teaching/_keynote_render/requests</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>StandardOutPath</key><string>/Users/impactus/Library/Logs/keynote-render.launchd.log</string>
+  <key>StandardErrorPath</key><string>/Users/impactus/Library/Logs/keynote-render.launchd.log</string>
+</dict>
+</plist>

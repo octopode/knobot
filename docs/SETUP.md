@@ -1,0 +1,83 @@
+# Setup notes and hard-won constraints
+
+Everything here was established by testing on the target Mac (Keynote 12.2.1,
+macOS 15.7.7). Where a claim is a guess, it says so. Change these with evidence.
+
+## Architecture
+
+```
+Claude Science sandbox                 │  the user's Mac (outside the sandbox)
+───────────────────────────────────────┼──────────────────────────────────────────
+kn_replace / kn_index  (keynote-parser)│
+   edits .key files directly           │
+                                       │
+kn_render writes                       │  LaunchAgent local.keynote-render
+  _keynote_render/requests/<job>.json ──▶   render_queue.py
+                                       │     copies deck → Keynote's container
+                                       │     clears xattrs, waits, opens + exports
+                                       │     (export_slides.applescript)
+reads renders/<job>/slide-NNN.png   ◀──┼     copies images back, writes status.json
+```
+
+The handler lives in `~/Library/Application Support/keynote-render/`, which the agent
+cannot write. The agent's only influence is the request JSON, which is validated:
+input must be a `.key` under the allowed root, job id and format are whitelisted.
+
+## Constraints that are load-bearing
+
+1. **Stage the clone inside Keynote's own container**
+   (`~/Library/Containers/com.apple.iWork.Keynote/Data/Documents/keynote-render`).
+   Handler runs staging anywhere else were refused with *"can't be opened right now /
+   Operation not permitted"*: on the separate `thermofiles` APFS volume, under
+   `~/Library/Application Support`, and in a plain home folder — through every
+   combination of copy method (`cp` vs `cp -c`), xattr state, launch context
+   (launchd vs Terminal), settle delays and retries. The first run staging into the
+   container succeeded. **The mechanism is unverified** — Keynote needing no sandbox
+   extension for its own container is a plausible guess, not a proven cause.
+   Decks the user has opened BY HAND behave differently and are not a valid control.
+2. **Never run the handler under an Apple platform binary.** `/usr/bin/python3` under
+   launchd is denied access to the `thermofiles` volume (`PermissionError` on
+   `os.listdir`). The plist runs the conda env's `python3.12`; `install.sh` checks it.
+3. **Full Disk Access on that interpreter**, or macOS prompts once per render — the
+   grant does not persist for an unsigned binary. Trade-off: anything run through that
+   interpreter gains full file access, including the skill's own helpers, which shell
+   out to it. A dedicated env limits the blast radius. The alternative is one click per
+   render, which works fine for batched work.
+4. **Cross-volume moves.** Outputs move from the container (boot volume) to
+   `teaching/` (its own volume); `os.replace` raises `EXDEV`, so the handler
+   copy-then-deletes.
+5. **AppleScript, not JXA.** JXA cannot coerce Keynote's enum values and fails with
+   `-1700 Can't convert types`, even with correct parameter names. AppleScript passes
+   them as keywords (`as slide images`, `image format:PNG`).
+6. **Wrap the export in `with timeout of N seconds`.** The default 2-minute Apple Event
+   limit fires on a large deck (`-1712`).
+7. **Keynote's dictionary is readable** at
+   `/Applications/Keynote.app/Contents/Resources/Keynote.sdef` — parse that XML for the
+   installed version's exact parameters. The `sdef` command needs full Xcode.
+
+## Failure modes worth recognising
+
+- **A run of fast, identical failures usually means a modal dialog** is waiting on the
+  user's screen, often behind other windows, and it blocks every later job. Deleting a
+  clone Keynote still holds is what creates those dialogs, so the handler only clears a
+  clone on success. Ask the user to check and to quit Keynote before retrying.
+- **"not picked up after 60 s"** — launchd's `WatchPaths` occasionally misses a new
+  file. `kn_render` touches the requests directory to re-trigger it. If it persists, the
+  LaunchAgent is not loaded (`launchctl print gui/$(id -u)/local.keynote-render`).
+  `QueueDirectories` does NOT work here at all; it never fired once.
+- **The agent cannot read `~/Library`**, so a failed clone there is not inspectable.
+  `status/<job>.json` and `render.log` (both under `teaching/`) carry the error instead.
+
+## Diagnosing by hand
+
+Run the handler yourself to separate host problems from launchd problems — Terminal
+holds permissions a launchd job may not:
+
+```bash
+launchctl bootout gui/$(id -u)/local.keynote-render      # stop it stealing the job
+/path/to/envs/keynote/bin/python3.12 \
+  "$HOME/Library/Application Support/keynote-render/render_queue.py"
+bash ~/thermofiles/teaching/_keynote_render/setup/install.sh   # restore
+```
+
+Check a deck opens at all: `osascript -e 'tell application "Keynote" to open POSIX file "/abs/path.key"'`
