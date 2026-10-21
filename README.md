@@ -1,4 +1,4 @@
-# keynotebot
+# knobot
 
 Edit Apple Keynote `.key` decks from [Claude Science](https://claude.ai) and let the
 agent **see** what it changed — by having Keynote itself render the slides to PNG.
@@ -13,7 +13,7 @@ local (stdio) connectors run in a sandbox that refuses to launch binaries from a
 env and cannot connect to `127.0.0.1`. Every "control Keynote from the agent" approach
 fails for one of those reasons.
 
-keynotebot works around all of it:
+knobot works around all of it:
 
 - **Editing** (including cross-deck slide merges) happens on the FILE, inside the sandbox, with
   [`keynote-parser`](https://github.com/psobot/keynote-parser) — no app involved.
