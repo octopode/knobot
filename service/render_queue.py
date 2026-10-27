@@ -21,8 +21,10 @@ Anything in requests/ that is not a valid request is moved to <ROOT>/rejected/.
 import errno, json, os, re, shutil, subprocess, sys, time
 from datetime import datetime, timezone
 
-ALLOWED_ROOT = os.environ.get("KR_ALLOWED_ROOT", "/Users/impactus/thermofiles/teaching")
-ROOT = os.environ.get("KR_ROOT", "/Users/impactus/thermofiles/teaching/_keynote_render")
+ALLOWED_ROOT = os.environ.get("KR_ALLOWED_ROOT",
+                              os.path.expanduser("~/thermofiles/teaching"))
+ROOT = os.environ.get("KR_ROOT",
+                      os.path.expanduser("~/thermofiles/teaching/_keynote_render"))
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXPORT_CMD = json.loads(os.environ["KR_EXPORT_CMD"]) if "KR_EXPORT_CMD" in os.environ else [
     "/usr/bin/osascript", os.path.join(HERE, "export_slides.applescript")]

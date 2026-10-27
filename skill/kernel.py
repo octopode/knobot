@@ -7,10 +7,19 @@ import time
 import uuid
 import zipfile
 
-KN_BIN = "/Users/impactus/.claude-science/conda/envs/keynote/bin"
-KN_WORK_DIR = "/Users/impactus/thermofiles/teaching/_keynote_work"
-KN_RENDER_ROOT = "/Users/impactus/thermofiles/teaching/_keynote_render"
-KN_PROTECTED_DIRS = ("/Users/impactus/thermofiles/teaching/pastslides",)
+# Configuration. Each may be overridden by the environment variable of the same name;
+# KN_PROTECTED_DIRS takes a colon-separated list. Defaults assume the layout in
+# docs/SETUP.md: a deck root holding _keynote_work (agent scratch), _keynote_render (the
+# service queue) and pastslides (originals, never written to).
+KN_DECK_ROOT = os.environ.get("KN_DECK_ROOT", os.path.expanduser("~/thermofiles/teaching"))
+KN_BIN = os.environ.get(
+    "KN_BIN", os.path.expanduser("~/.claude-science/conda/envs/keynote/bin"))
+KN_WORK_DIR = os.environ.get("KN_WORK_DIR", os.path.join(KN_DECK_ROOT, "_keynote_work"))
+KN_RENDER_ROOT = os.environ.get("KN_RENDER_ROOT",
+                                os.path.join(KN_DECK_ROOT, "_keynote_render"))
+KN_PROTECTED_DIRS = tuple(
+    p for p in os.environ.get("KN_PROTECTED_DIRS",
+                              os.path.join(KN_DECK_ROOT, "pastslides")).split(":") if p)
 
 
 def kn_skill_dir():

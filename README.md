@@ -28,6 +28,7 @@ text overflow, clipped titles and object collisions instead of guessing.
 
 ```
 skill/      the `keynote-files` Claude Science skill (SKILL.md, kernel.py, scripts/)
+            scripts/kn_slide_text.py does per-slide text/geometry edits
 service/    the macOS render service (LaunchAgent + queue handler + AppleScript exporter)
 docs/       project instructions, setup and troubleshooting
 ```
@@ -40,15 +41,22 @@ docs/       project instructions, setup and troubleshooting
    mamba create -n keynote -c conda-forge python=3.12 pip
    mamba run -n keynote pip install keynote-parser python-pptx
    ```
-   In Claude Science use an env named `keynote`; `skill/kernel.py` points `KN_BIN` at it.
-2. **Render service** — edit the paths at the top of `service/render_queue.py` and
-   `service/local.keynote-render.plist` for your user, then:
+   In Claude Science use an env named `keynote`; `skill/kernel.py` finds it via `KN_BIN`
+   (override that variable to point elsewhere).
+2. **Render service** — no file editing needed; the paths are configuration with
+   defaults (see `docs/SETUP.md`). To use the defaults:
    ```bash
    mkdir -p ~/thermofiles/teaching/_keynote_render/setup
    cp service/* ~/thermofiles/teaching/_keynote_render/setup/
    bash ~/thermofiles/teaching/_keynote_render/setup/install.sh
-   osacompile -o /dev/null "$HOME/Library/Application Support/keynote-render/export_slides.applescript"
    ```
+   To put your decks somewhere else, export the variables first:
+   ```bash
+   DECK_ROOT=~/Documents/decks KR_PYTHON=$(which python3.12) \
+     bash ~/path/to/setup/install.sh
+   ```
+   `install.sh` compile-checks both AppleScripts before installing anything, renders the
+   LaunchAgent from `local.keynote-render.plist.in`, and prints the resolved paths.
    The installer copies the handler to `~/Library/Application Support/keynote-render/`,
    OUTSIDE any agent-writable folder, so the agent can queue work but never change what
    runs on the host.

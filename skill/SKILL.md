@@ -33,6 +33,14 @@ duplicate were each verified by rendering the result.
    render shows what Keynote draws, and the two can disagree (see the workflow note on
    clipped text).
 
+## Configuration
+
+Paths come from environment variables with defaults for the layout in `docs/SETUP.md`:
+`KN_DECK_ROOT` (default `~/thermofiles/teaching`) with `KN_WORK_DIR`, `KN_RENDER_ROOT`
+and `KN_PROTECTED_DIRS` derived from it, plus `KN_BIN` for the conda env holding
+keynote-parser. The service side takes `DECK_ROOT`, `KR_ROOT` and `KR_PYTHON` at install
+time. Nothing is hardcoded to one machine.
+
 ## Environment
 
 - Conda env `keynote` (python 3.12): `keynote-parser` 1.14.5.0 and `python-pptx`,
@@ -166,6 +174,45 @@ Do not confuse this with PICTURE IMPORT, which was REMOVED (see the merge sectio
 adding an image file to an existing slide (`make new image`) works; turning image files
 into NEW slides (`make image slides`) crashes Keynote 12.2.1. Different commands,
 different outcomes.
+
+## Per-slide text and geometry: `scripts/kn_slide_text.py`
+
+keynote-parser's `replace` is deck-wide, so it cannot give two copies of one template
+slide different text. This script edits only the slide archives you name, and remaps every
+run-length text table (`tableParaStyle`, `tableCharStyle`, `tableLanguage`,
+`tableParaStarts`, ...) through each replacement span in UTF-16 units, so inline styling --
+italic species names, coloured words -- survives and the paragraph count may change.
+
+Invoke it directly (there is no kernel wrapper yet):
+
+```bash
+$KN_BIN/python scripts/kn_slide_text.py SRC.key DST.key EDITS.json
+```
+
+`EDITS.json` is a list of edit objects, each naming a `file` like `Index/Slide-123.iwa`
+(the `file` field `kn_index` reports):
+
+| edit | effect |
+|---|---|
+| `{"file":…, "find":"old", "replace":"new", "expect":1}` | literal replace within that slide only; `expect` asserts the occurrence count |
+| `{"file":…, "settext":"<text to match>", "text":"new", "para_style":…, "char_runs":…}` | replace a whole storage's contents, optionally restyling |
+| `{"file":…, "setlist":"<text to match>", "list_style":<id>}` | swap a storage's `tableListStyle` (used to kill stray list numbering) |
+| `{"file":…, "geom":"<archive id>"\|"match", "match":…, "x":…, "y":…, "w":…, "h":…, "flags":…}` | set a drawable's position/size in points |
+| `{"file":…, "zback":<id>}` | send a drawable to the back of the slide's z-order |
+| `{"file":…, "declare":[<style ids>]}` | add style objects to the slide component's `externalReferences` |
+
+Three traps it exists to handle, all found the hard way while building a lecture deck:
+
+1. **Restyling text to a style the slide does not already reference CRASHES Keynote**
+   (-609 on open). When Keynote duplicates a slide and its text boxes are later deleted,
+   its save drops that component's now-unused style references. Use the `declare` edit to
+   add every style id the new text uses -- including character styles -- before restyling.
+2. **An auto-height text box (`h=0`) stores `y` as its vertical CENTRE**, not its top.
+   Setting a fixed `h` clips the text to the old path.
+3. **`tableParaStyle` needs exactly one entry per paragraph** or the text vanishes.
+
+Status: proven in production deck-building (a 63-slide lecture deck), not regression-tested
+in the toolchain thread. Render after every run, as always.
 
 ## Rendering and SKIPPED slides
 

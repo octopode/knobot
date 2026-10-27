@@ -3,6 +3,26 @@
 Everything here was established by testing on the target Mac (Keynote 12.2.1,
 macOS 15.7.7). Where a claim is a guess, it says so. Change these with evidence.
 
+## Configuration
+
+Nothing is hardcoded to one machine; every path has an environment variable with a
+default. Export any of these before running `service/install.sh`:
+
+| variable | default | meaning |
+|---|---|---|
+| `DECK_ROOT` | `$HOME/thermofiles/teaching` | the ONLY tree the service reads decks from or writes results to; a request naming anything outside it is rejected |
+| `KR_ROOT` | `$DECK_ROOT/_keynote_render` | the queue folder the agent drops requests in; must be inside `DECK_ROOT` so the agent can write to it |
+| `KR_PYTHON` | `$HOME/.claude-science/conda/envs/keynote/bin/python3.12` | a NON-Apple python 3.10+ (Apple's `/usr/bin/python3` is denied access to non-boot volumes under launchd, which breaks every render) |
+
+`install.sh` renders `service/local.keynote-render.plist.in` with those values and writes
+the result to `~/Library/LaunchAgents/local.keynote-render.plist`, passing `KR_ALLOWED_ROOT`
+and `KR_ROOT` to the handler through the agent's `EnvironmentVariables`. Install the
+template directly and launchd will try to execute `@@PYTHON@@`.
+
+The skill side reads `KN_DECK_ROOT`, `KN_WORK_DIR`, `KN_RENDER_ROOT`, `KN_PROTECTED_DIRS`
+and `KN_BIN`, with the same defaults. Point `KN_PROTECTED_DIRS` (colon-separated) at every
+folder of originals that must never be written to.
+
 ## Architecture
 
 ```
