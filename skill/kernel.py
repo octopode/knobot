@@ -7,19 +7,39 @@ import time
 import uuid
 import zipfile
 
-# Configuration. Each may be overridden by the environment variable of the same name;
-# KN_PROTECTED_DIRS takes a colon-separated list. Defaults assume the layout in
-# docs/SETUP.md: a deck root holding _keynote_work (agent scratch), _keynote_render (the
-# service queue) and pastslides (originals, never written to).
-KN_DECK_ROOT = os.environ.get("KN_DECK_ROOT", os.path.expanduser("~/thermofiles/teaching"))
-KN_BIN = os.environ.get(
-    "KN_BIN", os.path.expanduser("~/.claude-science/conda/envs/keynote/bin"))
-KN_WORK_DIR = os.environ.get("KN_WORK_DIR", os.path.join(KN_DECK_ROOT, "_keynote_work"))
-KN_RENDER_ROOT = os.environ.get("KN_RENDER_ROOT",
-                                os.path.join(KN_DECK_ROOT, "_keynote_render"))
-KN_PROTECTED_DIRS = tuple(
-    p for p in os.environ.get("KN_PROTECTED_DIRS",
-                              os.path.join(KN_DECK_ROOT, "pastslides")).split(":") if p)
+# Configuration defaults. Each is overridable by the environment variable of the same
+# name; kn_protected_dirs() takes a colon-separated list. Resolved by the accessors below
+# rather than at import, because a published skill's kernel may only assign literal
+# constants at module level. Defaults assume the layout in docs/SETUP.md: a deck root
+# holding _keynote_work (agent scratch), _keynote_render (the service queue) and
+# pastslides (originals, never written to).
+KN_DEFAULT_DECK_ROOT = "~/thermofiles/teaching"
+KN_DEFAULT_BIN = "~/.claude-science/conda/envs/keynote/bin"
+
+
+def kn_deck_root():
+    return os.path.expanduser(os.environ.get("KN_DECK_ROOT") or KN_DEFAULT_DECK_ROOT)
+
+
+def kn_bin():
+    """Directory of the python that has keynote-parser installed."""
+    return os.path.expanduser(os.environ.get("KN_BIN") or KN_DEFAULT_BIN)
+
+
+def kn_work_dir():
+    return os.path.expanduser(os.environ.get("KN_WORK_DIR")
+                              or os.path.join(kn_deck_root(), "_keynote_work"))
+
+
+def kn_render_root():
+    return os.path.expanduser(os.environ.get("KN_RENDER_ROOT")
+                              or os.path.join(kn_deck_root(), "_keynote_render"))
+
+
+def kn_protected_dirs():
+    """Folders of originals that must never be written to."""
+    raw = os.environ.get("KN_PROTECTED_DIRS") or os.path.join(kn_deck_root(), "pastslides")
+    return tuple(os.path.expanduser(p) for p in raw.split(":") if p)
 
 
 def kn_skill_dir():
@@ -55,7 +75,7 @@ def kn_index(deck, geometry=False):
     (+ shapes with x/y/w/h in slide points when geometry=True). Safe on any deck:
     decodes the binary .iwa members only, never YAML, never extracts media."""
     script = os.path.join(kn_skill_dir(), "scripts", "kn_index.py")
-    args = [os.path.join(KN_BIN, "python"), script, deck] + (["--geometry"] if geometry else [])
+    args = [os.path.join(kn_bin(), "python"), script, deck] + (["--geometry"] if geometry else [])
     p = subprocess.run(args, capture_output=True, text=True)
     if p.returncode != 0:
         raise RuntimeError("kn_index failed: %s" % p.stderr[-2000:])
@@ -75,10 +95,10 @@ def kn_find(deck, pattern, notes=False, regex=False):
 
 
 def kn_new_copy_path(src, suffix="edit"):
-    """A fresh output path in KN_WORK_DIR: <stem>_<suffix>_<YYYYmmdd-HHMMSS>.key"""
-    os.makedirs(KN_WORK_DIR, exist_ok=True)
+    """A fresh output path in kn_work_dir(): <stem>_<suffix>_<YYYYmmdd-HHMMSS>.key"""
+    os.makedirs(kn_work_dir(), exist_ok=True)
     stem = os.path.splitext(os.path.basename(src))[0]
-    return os.path.join(KN_WORK_DIR, "%s_%s_%s.key" % (stem, suffix, time.strftime("%Y%m%d-%H%M%S")))
+    return os.path.join(kn_work_dir(), "%s_%s_%s.key" % (stem, suffix, time.strftime("%Y%m%d-%H%M%S")))
 
 
 def kn_replace(src, dst, pairs, regex=False):
@@ -91,7 +111,7 @@ def kn_replace(src, dst, pairs, regex=False):
         raise ValueError("dst must differ from src; originals are never edited in place")
     if os.path.exists(dst):
         raise FileExistsError("refusing to overwrite existing %s" % dst)
-    if any(dst_r.startswith(os.path.realpath(p) + os.sep) for p in KN_PROTECTED_DIRS):
+    if any(dst_r.startswith(os.path.realpath(p) + os.sep) for p in kn_protected_dirs()):
         raise ValueError("refusing to write into a protected folder: %s" % dst)
     kn_preflight(src)
     reps = []
@@ -104,7 +124,7 @@ def kn_replace(src, dst, pairs, regex=False):
     with open(spec, "w") as fh:
         json.dump({"replacements": reps}, fh)
     try:
-        p = subprocess.run([os.path.join(KN_BIN, "keynote-parser"), "replace",
+        p = subprocess.run([os.path.join(kn_bin(), "keynote-parser"), "replace",
                             "--replacements", spec, "-o", dst, src],
                            capture_output=True, text=True)
     finally:
@@ -128,11 +148,11 @@ def kn_render(deck, fmt="png", timeout=900, wait=True, poll=2.0, stages=False):
     every build stage; the image count then exceeds the slide count and
     kn_stage_map(deck) tells you which images belong to which slide.
     Raises with the handler's error text."""
-    req_dir = os.path.join(KN_RENDER_ROOT, "requests")
+    req_dir = os.path.join(kn_render_root(), "requests")
     if not os.path.isdir(req_dir):
         raise RuntimeError("render queue missing (%s); is keynote-render installed?" % req_dir)
     job = "r%s-%s" % (time.strftime("%Y%m%d-%H%M%S"), uuid.uuid4().hex[:6])
-    tmp = os.path.join(KN_RENDER_ROOT, ".%s.tmp" % job)
+    tmp = os.path.join(kn_render_root(), ".%s.tmp" % job)
     with open(tmp, "w") as fh:
         json.dump({"job": job, "input": os.path.realpath(deck), "format": fmt,
                    "timeout": int(timeout), "stages": bool(stages)}, fh)
@@ -145,7 +165,7 @@ def kn_render(deck, fmt="png", timeout=900, wait=True, poll=2.0, stages=False):
         pass
     if not wait:
         return job
-    status = os.path.join(KN_RENDER_ROOT, "status", job + ".json")
+    status = os.path.join(kn_render_root(), "status", job + ".json")
     deadline = time.time() + timeout + 120
     queued_deadline = time.time() + 60
     while time.time() < deadline:
@@ -159,9 +179,9 @@ def kn_render(deck, fmt="png", timeout=900, wait=True, poll=2.0, stages=False):
             raise RuntimeError("render request not picked up after 60 s; is the "
                                "local.keynote-render LaunchAgent loaded? (job %s)" % job)
         else:
-            rej = [f for f in os.listdir(os.path.join(KN_RENDER_ROOT, "rejected")) if f.startswith(job)]
+            rej = [f for f in os.listdir(os.path.join(kn_render_root(), "rejected")) if f.startswith(job)]
             if rej:
-                raise RuntimeError("render request rejected; see %s/render.log" % KN_RENDER_ROOT)
+                raise RuntimeError("render request rejected; see %s/render.log" % kn_render_root())
         time.sleep(poll)
     raise TimeoutError("render %s did not finish within %ss" % (job, timeout + 120))
 
@@ -217,13 +237,13 @@ def kn_slide_ops(src, dst, delete=None, order=None):
         raise ValueError("dst must differ from src; originals are never edited in place")
     if os.path.exists(dst):
         raise FileExistsError("refusing to overwrite existing %s" % dst)
-    if any(dst_r.startswith(os.path.realpath(x) + os.sep) for x in KN_PROTECTED_DIRS):
+    if any(dst_r.startswith(os.path.realpath(x) + os.sep) for x in kn_protected_dirs()):
         raise ValueError("refusing to write into a protected folder: %s" % dst)
     kn_preflight(src)
     os.makedirs(os.path.dirname(dst_r), exist_ok=True)
     script = os.path.join(kn_skill_dir(), "scripts", "kn_slide_ops.py")
     spec = json.dumps({"delete": list(delete or []), "order": list(order or [])})
-    p = subprocess.run([os.path.join(KN_BIN, "python"), script, src_r, dst_r, spec],
+    p = subprocess.run([os.path.join(kn_bin(), "python"), script, src_r, dst_r, spec],
                        capture_output=True, text=True)
     if p.returncode != 0:
         raise RuntimeError("kn_slide_ops failed: %s" % (p.stderr or p.stdout)[-2000:])
@@ -256,7 +276,7 @@ def kn_deck_ops(src, dst, ops, timeout=1800, poll=2.0):
     The saved deck loses buildEventCount (Keynote writes only hasExplicitBuilds), so
     kn_stage_map will refuse on the result; builds themselves survive.
     ALWAYS render the result and look at it. Returns dst."""
-    req_dir = os.path.join(KN_RENDER_ROOT, "requests")
+    req_dir = os.path.join(kn_render_root(), "requests")
     if not os.path.isdir(req_dir):
         raise RuntimeError("render queue missing (%s); is keynote-render installed?" % req_dir)
     if not ops:
@@ -266,11 +286,11 @@ def kn_deck_ops(src, dst, ops, timeout=1800, poll=2.0):
         raise ValueError("dst must differ from src; originals are never edited in place")
     if os.path.exists(dst_r):
         raise FileExistsError("refusing to overwrite existing %s" % dst_r)
-    if any(dst_r.startswith(os.path.realpath(x) + os.sep) for x in KN_PROTECTED_DIRS):
+    if any(dst_r.startswith(os.path.realpath(x) + os.sep) for x in kn_protected_dirs()):
         raise ValueError("refusing to write into a protected folder: %s" % dst_r)
     kn_preflight(src)
     job = "d%s-%s" % (time.strftime("%Y%m%d-%H%M%S"), uuid.uuid4().hex[:6])
-    tmp = os.path.join(KN_RENDER_ROOT, ".%s.tmp" % job)
+    tmp = os.path.join(kn_render_root(), ".%s.tmp" % job)
     with open(tmp, "w") as fh:
         json.dump({"job": job, "action": "duplicate", "input": src_r, "ops": list(ops),
                    "output": dst_r, "timeout": int(timeout)}, fh)
@@ -279,7 +299,7 @@ def kn_deck_ops(src, dst, ops, timeout=1800, poll=2.0):
         os.utime(req_dir, None)
     except OSError:
         pass
-    status = os.path.join(KN_RENDER_ROOT, "status", job + ".json")
+    status = os.path.join(kn_render_root(), "status", job + ".json")
     deadline = time.time() + timeout + 120
     while time.time() < deadline:
         if os.path.exists(status):
@@ -291,10 +311,10 @@ def kn_deck_ops(src, dst, ops, timeout=1800, poll=2.0):
             if st["state"] == "error":
                 raise RuntimeError("deck ops %s failed: %s" % (job, st.get("error")))
         else:
-            rej = [f for f in os.listdir(os.path.join(KN_RENDER_ROOT, "rejected"))
+            rej = [f for f in os.listdir(os.path.join(kn_render_root(), "rejected"))
                    if f.startswith(job)]
             if rej:
-                raise RuntimeError("request rejected; see %s/render.log" % KN_RENDER_ROOT)
+                raise RuntimeError("request rejected; see %s/render.log" % kn_render_root())
         time.sleep(poll)
     raise TimeoutError("deck ops %s did not finish within %ss" % (job, timeout + 120))
 
@@ -358,7 +378,7 @@ def kn_merge_slides(src, dst, from_deck, slides):
         raise ValueError("dst must differ from src; originals are never edited in place")
     if os.path.exists(dst):
         raise FileExistsError("refusing to overwrite existing %s" % dst)
-    if any(dst_r.startswith(os.path.realpath(x) + os.sep) for x in KN_PROTECTED_DIRS):
+    if any(dst_r.startswith(os.path.realpath(x) + os.sep) for x in kn_protected_dirs()):
         raise ValueError("refusing to write into a protected folder: %s" % dst)
     kn_preflight(src)
     kn_preflight(from_deck)
@@ -372,7 +392,7 @@ def kn_merge_slides(src, dst, from_deck, slides):
     before = kn_index(src)["n_slides"]
     os.makedirs(os.path.dirname(dst_r), exist_ok=True)
     script = os.path.join(kn_skill_dir(), "scripts", "kn_merge.py")
-    p = subprocess.run([os.path.join(KN_BIN, "python"), script, src_r, from_r, dst_r,
+    p = subprocess.run([os.path.join(kn_bin(), "python"), script, src_r, from_r, dst_r,
                         json.dumps(nums)], capture_output=True, text=True)
     if p.returncode != 0:
         raise RuntimeError("kn_merge failed: %s" % (p.stderr or p.stdout)[-2000:])

@@ -20,7 +20,14 @@ and `KR_ROOT` to the handler through the agent's `EnvironmentVariables`. Install
 template directly and launchd will try to execute `@@PYTHON@@`.
 
 The skill side reads `KN_DECK_ROOT`, `KN_WORK_DIR`, `KN_RENDER_ROOT`, `KN_PROTECTED_DIRS`
-and `KN_BIN`, with the same defaults. Point `KN_PROTECTED_DIRS` (colon-separated) at every
+and `KN_BIN`, with the same defaults, through the accessor functions `kn_deck_root()`,
+`kn_work_dir()`, `kn_render_root()`, `kn_protected_dirs()` and `kn_bin()`. They are
+functions rather than module constants on purpose: a published Claude Science skill's
+kernel passes a structural gate that permits only imports, function definitions and
+assignment of LITERAL constants at module level, so `os.environ.get(...)` at import time
+is rejected ("Assign at module top level — sidecars may only define functions, import,
+and assign literal constants to plain names"). Keep the two `KN_DEFAULT_*` literals as
+literals. Point `KN_PROTECTED_DIRS` (colon-separated) at every
 folder of originals that must never be written to.
 
 ## Architecture
